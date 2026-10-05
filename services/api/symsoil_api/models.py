@@ -173,6 +173,61 @@ class RecoveryPending(Base):
     created_at: Mapped[str] = mapped_column(String(40))
 
 
+class ApprovalAuthority(Base):
+    __tablename__ = "approval_authorities"
+    __table_args__ = (UniqueConstraint("member_id", "topic_id"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    member_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    topic_id: Mapped[str] = mapped_column(ForeignKey("topics.id"), index=True)
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    basis: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[str] = mapped_column(String(40))
+    revoked_at: Mapped[str | None] = mapped_column(String(40), nullable=True)
+
+
+class Decision(Base):
+    __tablename__ = "decisions"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    topic_id: Mapped[str] = mapped_column(ForeignKey("topics.id"), index=True)
+    option_id: Mapped[str] = mapped_column(ForeignKey("options.id"))
+    option_version: Mapped[int] = mapped_column(Integer)
+    author_id: Mapped[str] = mapped_column(ForeignKey("users.id"))
+    title: Mapped[str] = mapped_column(String(160))
+    text: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(20), default="draft")
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    rule_version: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    required_approver_ids: Mapped[list[str]] = mapped_column(JSON, default=list)
+    required_invitation_ids: Mapped[list[str]] = mapped_column(JSON, default=list)
+    created_at: Mapped[str] = mapped_column(String(40))
+    updated_at: Mapped[str] = mapped_column(String(40))
+    effective_at: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    started_at: Mapped[str | None] = mapped_column(String(40), nullable=True)
+
+
+class DecisionCondition(Base):
+    __tablename__ = "decision_conditions"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    decision_id: Mapped[str] = mapped_column(ForeignKey("decisions.id"), index=True)
+    kind: Mapped[str] = mapped_column(String(20))
+    label: Mapped[str] = mapped_column(String(500))
+    satisfied: Mapped[bool] = mapped_column(Boolean, default=False)
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    verifier_id: Mapped[str | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    verified_at: Mapped[str | None] = mapped_column(String(40), nullable=True)
+
+
+class DecisionApproval(Base):
+    __tablename__ = "decision_approvals"
+    decision_id: Mapped[str] = mapped_column(ForeignKey("decisions.id"), primary_key=True)
+    decision_version: Mapped[int] = mapped_column(Integer, primary_key=True)
+    approver_id: Mapped[str] = mapped_column(ForeignKey("users.id"), primary_key=True)
+    authority_id: Mapped[str] = mapped_column(ForeignKey("approval_authorities.id"))
+    authority_version: Mapped[int] = mapped_column(Integer)
+    created_at: Mapped[str] = mapped_column(String(40))
+
+
 class ExpressionCandidate(Base):
     __tablename__ = "expression_candidates"
     __table_args__ = (UniqueConstraint("utterance_id", "utterance_version", "kind"),)

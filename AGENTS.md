@@ -2,7 +2,7 @@
 
 Build SymSoil as a community-controlled local application. Read docs/product/PRD.md and the current release scope before changing behavior.
 
-Current increment: R0.5; read docs/development/R05_RECOVERY_SCOPE.md and API_CONTRACT_R05_RECOVERY.md alongside the R0.4, R0.3 and R0.2 baseline contracts. The uploaded implementation-plan alignment is docs/product/IMPLEMENTATION_ALIGNMENT.md. All current increments remain synthetic development, not a complete R1 release. Read CONTINUATION.md before resuming work to avoid concurrent branch changes.
+Current increment: R0.6; read docs/development/R06_DECISIONS_SCOPE.md and API_CONTRACT_R06_DECISIONS.md alongside the R0.5 recovery contract and earlier baselines. The uploaded implementation-plan alignment is docs/product/IMPLEMENTATION_ALIGNMENT.md. All current increments remain synthetic development, not a complete R1 release. Read CONTINUATION.md before resuming work to avoid concurrent branch changes.
 
 - R0 is a synthetic-data development release. Never imply that a synthetic acceptance or discussion is a real community decision.
 - Accuracy confirmation, sharing permission, stance, approval, and task acceptance are different operations.
@@ -15,3 +15,4 @@ Current increment: R0.5; read docs/development/R05_RECOVERY_SCOPE.md and API_CON
 - Describe release limitations and migration steps honestly. Do not mark unimplemented PRD requirements complete.
 
 - Correction text is explicitly shared only between requester and verified document uploader. Admin roles do not grant access. Never ingest correction text into retrieval; source access and correction sharing are independent.
+- Approval authority is explicitly registered per topic and version. Account role, stance, understanding, sharing, invitation, and task acceptance never imply formal approval. An effective decision does not imply that action start conditions are ready.
