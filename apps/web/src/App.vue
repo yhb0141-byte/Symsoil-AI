@@ -3,13 +3,14 @@ import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
 import Icon from './components/Icon.vue'
 import Modal from './components/Modal.vue'
 import UnderstandingList from './components/UnderstandingList.vue'
+import KnowledgePanel from './components/KnowledgePanel.vue'
 import { createCurrentRecords } from './lib/currentRecords'
 import { ApiError, clearSession, endSession, errorText, mutationKey, onUnauthorized, request, setSession } from './lib/api'
 import { candidateLabels, choiceLabels, confirmedCandidate, dateText, invitationLabels, isConfirmed, roleLabels, stanceLabels, understandingLabels, validStance } from './lib/domain'
-import type { AiStatus, AuditEvent, Candidate, CandidateKind, Dashboard, Document, ExpressionDetail, Invitation, InvitationResponse, Member, ModelSuggestions, Option, RephraseChoice, Session, SessionStatus, StanceKind, Topic, TopicDetail, Understanding, UnderstandingStatus, User, Utterance, Viewpoint } from './lib/types'
+import type { AiStatus, AuditEvent, Candidate, CandidateKind, Dashboard, ExpressionDetail, Invitation, InvitationResponse, Member, ModelSuggestions, Option, RephraseChoice, Session, SessionStatus, StanceKind, Topic, TopicDetail, Understanding, UnderstandingStatus, User, Utterance, Viewpoint } from './lib/types'
 
 type Page = 'home' | 'documents' | 'expressions' | 'topics' | 'tasks' | 'memory' | 'permissions' | 'admin'
-type Dialog = 'document' | 'expression' | 'share' | 'revoke' | 'topic' | 'participants' | 'option' | 'stance' | 'invitation' | 'response' | 'help' | 'admin-invite' | 'freeze' | 'expression-review' | 'candidate' | 'understanding' | 'understanding-response' | null
+type Dialog = 'expression' | 'share' | 'revoke' | 'topic' | 'participants' | 'option' | 'stance' | 'invitation' | 'response' | 'help' | 'admin-invite' | 'freeze' | 'expression-review' | 'candidate' | 'understanding' | 'understanding-response' | null
 const entries: { id: Page; title: string; subtitle: string; icon: string }[] = [
   { id: 'documents', title: '查资料', subtitle: '找到来源，也找到下一步', icon: 'book' },
   { id: 'expressions', title: '说想法', subtitle: '先写给自己，再选择分享', icon: 'pen' },
@@ -32,7 +33,6 @@ const dialog = ref<Dialog>(null)
 const loginMode = ref<'login' | 'register'>('login')
 const login = ref({ username: '', password: '', token: '' })
 const dashboard = ref<Dashboard | null>(null)
-const documents = ref<Document[]>([])
 const expressions = ref<Utterance[]>([])
 const topics = ref<Topic[]>([])
 const invitations = ref<Invitation[]>([])
@@ -40,13 +40,11 @@ const members = ref<Member[]>([])
 const adminMembers = ref<User[]>([])
 const audits = ref<AuditEvent[]>([])
 const sessions = ref<SessionStatus[]>([])
-const selectedDocument = ref<Document | null>(null)
 const selectedExpression = ref<Utterance | null>(null)
 const selectedTopic = ref<TopicDetail | null>(null)
 const selectedOption = ref<Option | null>(null)
 const selectedInvitation = ref<Invitation | null>(null)
 const freezeUser = ref<User | null>(null)
-const query = ref('')
 const expressionDetail = ref<ExpressionDetail | null>(null)
 const selectedCandidate = ref<Candidate | null>(null)
 const shareRepresentation = ref<'original' | 'candidate'>('original')
@@ -98,7 +96,7 @@ const sourceProofMatches = computed(() => {
   return !!proof && proof.utterance_version === expressionDetail.value?.utterance.version && proof.kind === draft.kind && proof.text === draft.text && proof.context === draft.context && proof.target_context === draft.target_context && proof.purpose === draft.purpose
 })
 const incomingUnderstandings = computed(() => understandings.value.filter(item => item.author_id === user.value?.id && item.status === 'pending'))
-const modalTitle = computed(() => ({ help: '求助与人工路径', document: '资料原文', expression: selectedExpression.value ? '编辑我的原话' : '写下我的想法', share: '预览本次唯一正文分享', revoke: '撤回表达分享', topic: '发起合成测试议题', participants: '添加议题参与者', option: '补充备选方案', stance: '核对并表达我的立场', invitation: '邀请本人承担任务', response: '核对任务条款', 'admin-invite': '建立一次性加入邀请', freeze: '冻结本地账号', 'expression-review': '原话与候选转述 · 仅本人可见', candidate: selectedCandidate.value ? '修改私人候选' : '保存私人候选', understanding: '我理解的是…', 'understanding-response': '理解核对 · 仅双方可见' }[dialog.value ?? 'help']))
+const modalTitle = computed(() => ({ help: '求助与人工路径', expression: selectedExpression.value ? '编辑我的原话' : '写下我的想法', share: '预览本次唯一正文分享', revoke: '撤回表达分享', topic: '发起合成测试议题', participants: '添加议题参与者', option: '补充备选方案', stance: '核对并表达我的立场', invitation: '邀请本人承担任务', response: '核对任务条款', 'admin-invite': '建立一次性加入邀请', freeze: '冻结本地账号', 'expression-review': '原话与候选转述 · 仅本人可见', candidate: selectedCandidate.value ? '修改私人候选' : '保存私人候选', understanding: '我理解的是…', 'understanding-response': '理解核对 · 仅双方可见' }[dialog.value ?? 'help']))
 const currentStance = computed(() => selectedOption.value?.stances.find(item => item.member_id === user.value?.id))
 
 function showNotice(message: string) {
@@ -111,16 +109,16 @@ function resetPrivateMemory(reason = '') {
   clearSession()
   user.value = null
   dashboard.value = null
-  documents.value = []; expressions.value = []; topics.value = []; invitations.value = []
+  expressions.value = []; topics.value = []; invitations.value = []
   members.value = []; adminMembers.value = []; audits.value = []; sessions.value = []
-  selectedDocument.value = null; selectedExpression.value = null; selectedTopic.value = null
+  selectedExpression.value = null; selectedTopic.value = null
   selectedOption.value = null; selectedInvitation.value = null; freezeUser.value = null
   expressionForm.value = { title: '', text: '' }; topicForm.value = { title: '', description: '', scope: '' }
   optionForm.value = { title: '', description: '', cost: '', labor: '', risks: '' }
   invitationForm.value = { invitee_id: '', title: '', description: '', completion_criteria: '', resources: '', compensation: '', due_date: '' }
   responseForm.value = { response: 'accepted', note: '' }; stanceForm.value = { stance: 'need_info', condition: '' }
   adminForm.value = { username: '', display_name: '', role: 'member' }; login.value = { username: '', password: '', token: '' }
-  inviteResult.value = null; shareTopicId.value = ''; shareConsent.value = false; query.value = ''; participantId.value = ''; helpSubject.value = '参与与人工协助'
+  inviteResult.value = null; shareTopicId.value = ''; shareConsent.value = false; participantId.value = ''; helpSubject.value = '参与与人工协助'
   expressionDetail.value = null; selectedCandidate.value = null; shareRepresentation.value = 'original'
   candidateForm.value = { kind: 'everyday', text: '', context: '', target_context: '', purpose: '' }; aiContext.value = { context: '', target_context: '', purpose: '' }
   aiStatus.value = null; aiError.value = ''; aiLoading.value = false; modelSuggestions.value = null; modelContext.value = { context: '', target_context: '', purpose: '' }; suggestionSnapshot.value = null
@@ -190,7 +188,6 @@ async function loadPage(target = page.value) {
       const results = await Promise.all([request<Dashboard>('/dashboard'), currentUnderstandings.refresh()])
       dashboard.value = results[0]; understandingsError.value = ''
     }
-    else if (target === 'documents') documents.value = await request<Document[]>(`/documents${query.value.trim() ? `?q=${encodeURIComponent(query.value.trim())}` : ''}`)
     else if (target === 'expressions') {
       const results = await Promise.all([request<Utterance[]>('/utterances'), request<Topic[]>('/topics'), currentUnderstandings.refresh()])
       expressions.value = results[0]; topics.value = results[1]; understandingsError.value = ''
@@ -482,7 +479,7 @@ onUnmounted(() => { if (idleTimer) clearInterval(idleTimer); if (noticeTimer) cl
       <p class="muted">社区掌握 · 本地协作 · 本人确认</p>
     </section>
     <main class="login-card">
-      <div class="badge warning">R0.2 · 合成数据开发版</div>
+      <div class="badge warning">R0.3 · 合成数据开发版</div>
       <h2>{{ loginMode === 'login' ? '回到社区工作台' : '使用一次性邀请加入' }}</h2>
       <p class="muted">本轮仅供开发测试。议题、回应与任务均不代表真实社区决定。本地模型建议默认关闭，人工流程可独立使用。</p>
       <div v-if="authError" class="notice info" role="alert">{{ authError }}</div>
@@ -506,7 +503,7 @@ onUnmounted(() => { if (idleTimer) clearInterval(idleTimer); if (noticeTimer) cl
     </aside>
     <div class="workspace">
       <header class="topbar"><div><span class="desktop-only muted">共壤 / </span><span>{{ pageTitle }}</span></div><div class="inline-actions"><span class="badge">本地工作台</span><span class="user-name">{{ user.display_name }}</span><button class="button ghost icon-button" aria-label="退出账号" @click="logout()"><Icon name="logout" /></button></div></header>
-      <div class="synthetic-banner"><span><strong>R0.2 合成测试</strong> · 当前记录不构成真实社区决定或项目授权。</span><span>{{ aiStatus?.available ? `本地模型：${aiStatus.model}` : aiStatus ? aiStatus.enabled ? '本地模型未就绪 · 可人工处理' : '本地模型关闭 · 可人工处理' : '模型状态待检查' }}</span></div>
+      <div class="synthetic-banner"><span><strong>R0.3 合成测试</strong> · 当前记录不构成真实社区决定或项目授权。</span><span>{{ aiStatus?.available ? `本地模型：${aiStatus.model}` : aiStatus ? aiStatus.enabled ? '本地模型未就绪 · 可人工处理' : '本地模型关闭 · 可人工处理' : '模型状态待检查' }}</span></div>
       <main class="main-content">
         <div v-if="notice" class="notice success" role="status">{{ notice }}</div>
         <div v-if="pageError" class="notice error" role="alert"><p>{{ pageError }}</p><button class="button secondary" :disabled="loading" @click="selectedTopic ? loadTopic(selectedTopic.id) : loadPage()">重新载入</button></div>
@@ -526,13 +523,7 @@ onUnmounted(() => { if (idleTimer) clearInterval(idleTimer); if (noticeTimer) cl
             <div class="section-heading"><h2>最近的议题</h2><button v-if="canCreateTopic" class="button ghost" @click="newTopic()"><Icon name="plus" />发起议题</button></div>
             <section class="card"><article v-for="topic in dashboard?.topics ?? []" :key="topic.id" class="list-row"><div class="row-content"><h3>{{ topic.title }}</h3><p class="muted">{{ topic.scope }}</p></div><span class="badge">讨论中</span><button class="button ghost" @click="loadTopic(topic.id)">进入<Icon name="arrow" :size="17" /></button></article><div v-if="!dashboard?.topics.length" class="empty-state compact"><p>暂无可见议题。请联系已授权主持人发起或邀请参与。</p></div></section>
           </template>
-          <template v-else-if="page === 'documents'">
-            <div class="page-heading"><div><p class="eyebrow">有来源的社区知识</p><h1 id="page-title" tabindex="-1">查资料</h1><p class="muted">R0 提供关键词查询和原文阅读。所有资料均为合成测试内容。</p></div><button class="button secondary" @click="openHelp('资料纠错与查找负责人')">资料有疑问</button></div>
-            <form class="toolbar search-form" @submit.prevent="loadPage('documents')"><label class="search-input"><Icon name="search" /><input v-model="query" aria-label="搜索社区资料" placeholder="搜索规则、场地或参与方法…" maxlength="200" /></label><button class="button primary" type="submit">查找资料</button><button v-if="query" class="button ghost" type="button" @click="query = ''; loadPage('documents')">清除</button></form>
-            <div class="notice info">AI 问答尚未启用。当前搜索直接匹配已有资料，不会生成答案；找不到时可走人工路径。</div>
-            <section v-if="documents.length" class="card-grid"><article v-for="doc in documents" :key="doc.id" class="card"><span class="badge">{{ doc.category }}</span><h2>{{ doc.title }}</h2><p class="line-clamp">{{ doc.body }}</p><div class="source-meta">第 {{ doc.version }} 版 · {{ dateText(doc.updated_at) }}</div><button class="button ghost" @click="selectedDocument = doc; openDialog('document')">查看原文与来源<Icon name="arrow" :size="17" /></button></article></section>
-            <div v-else class="card empty-state"><Icon name="book" :size="34" /><h2>没有找到匹配资料</h2><p>试试更短的关键词，或请社区人员帮助查找。</p><button class="button secondary" @click="openHelp('找不到需要的资料')">转人工查找</button></div>
-          </template>
+          <KnowledgePanel v-else-if="page === 'documents'" :key="user.id" :current-user-id="user.id" :ai-status="aiStatus" @help="openHelp" />
           <template v-else-if="page === 'expressions'">
             <div class="page-heading"><div><p class="eyebrow">先表达，再决定谁能看见</p><h1 id="page-title" tabindex="-1">说想法</h1><p class="muted">你的原话、候选与语境默认只对本人可见。本人核对和允许分享是不同操作。</p></div><button class="button primary" @click="editExpression()"><Icon name="plus" />写一个私稿</button></div>
             <div class="notice info">R0.2 支持最多两种私人候选，以及仅双方可见的理解核对。候选可以手写；本地模型输出始终待本人核对，不自动保存、确认或分享。</div>
@@ -592,7 +583,6 @@ onUnmounted(() => { if (idleTimer) clearInterval(idleTimer); if (noticeTimer) cl
   <Modal v-if="dialog" :title="modalTitle" :wide="dialog === 'expression-review'" @close="closeDialog">
     <div v-if="formError" class="notice error" role="alert"><p>{{ formError }}</p><button v-if="formError.includes('版本')" class="button secondary" @click="reloadAfterConflict()">关闭并重新载入</button></div>
     <template v-if="dialog === 'help'"><span class="badge">人工协助 · 不会自动发送</span><h3>{{ helpSubject }}</h3><p>请联系你所在社区已约定的值班人员、议题主持人或独立请求受理人。R0 尚未配置真实联系人，也不自动发送消息。</p><ol class="manual-steps"><li>先说明你希望得到什么帮助，可以不讲述敏感经历。</li><li>当面或通过已约定渠道核对接收人，并说明哪些内容仅供对方阅读。</li><li>涉及观点、任务或授权，请一起核对具体版本和本人意愿。</li><li>共同记忆须先让相关人审阅，记录受众和期限；不同意或没有回应时不发布。</li></ol><div class="notice info">如为程序异议或涉及主持人本人，请寻找另一位独立受理人。未上线的功能可先采用纸面记录与本人签认。</div><button class="button primary" @click="closeDialog()">已了解人工路径</button></template>
-    <template v-else-if="dialog === 'document' && selectedDocument"><span class="badge">{{ selectedDocument.category }} · 合成资料</span><h3>{{ selectedDocument.title }}</h3><p class="preserve-text document-body">{{ selectedDocument.body }}</p><div class="divider"></div><dl class="key-values"><div><dt>来源</dt><dd>{{ selectedDocument.source }}</dd></div><div><dt>版本</dt><dd>第 {{ selectedDocument.version }} 版</dd></div><div><dt>更新</dt><dd>{{ dateText(selectedDocument.updated_at) }}</dd></div></dl><button class="button secondary" @click="openHelp('资料来源与内容纠错')">请求人工核对</button></template>
     <form v-else-if="dialog === 'expression'" @submit.prevent="saveExpression"><div class="notice info">默认仅本人可见。{{ selectedExpression ? '修改会产生新版本，并移除当前议题中的旧共享文本。新版须重新确认和分享。' : '保存只建立私稿；不会自动分享。' }}</div><label class="form-field">想法标题<input v-model="expressionForm.title" required maxlength="160" placeholder="用一句话描述你想谈的事" /></label><label class="form-field">我的原话<textarea v-model="expressionForm.text" required maxlength="10000" rows="9" placeholder="可以说出担忧、拒绝、条件与不确定性，不必写得很完美。"></textarea></label><p class="muted">系统完整保存你提交的原话。候选转述在另一界面独立核对，原话不会被候选覆盖。</p><div class="inline-actions"><button class="button primary" type="submit" :disabled="busy">{{ busy ? '保存中…' : '保存私人原话' }}</button><button class="button secondary" type="button" :disabled="busy" @click="closeDialog()">取消</button></div></form>
     <template v-else-if="dialog === 'expression-review' && expressionDetail">
       <div class="notice info">这里的原话、两个候选及语境都只对本人可见。确认原话准确、选择候选、允许分享分别记录；候选或选择变化会停止旧分享。</div>

@@ -828,3 +828,48 @@ td { overflow-wrap: anywhere; }
 .modal-panel form > .eyebrow { margin-top: 20px; }
 .candidate-source.manual { color: #7a765f; border-color: #dfddca; background: #f6f4e8; }
 .candidate-source.ollama { color: #567346; border-color: #d0dfc2; background: #edf3e5; }
+
+/* Local knowledge: precise versions and explicit audiences remain visible. */
+.knowledge-workspace { min-width: 0; }
+.knowledge-workspace > .notice { margin-bottom: 18px; }
+.knowledge-tabs { display: flex; flex-wrap: wrap; gap: 9px; margin: 23px 0; }
+.knowledge-tabs .button { min-height: 43px; }
+.knowledge-count { display: inline-flex; align-items: center; justify-content: center; min-width: 20px; min-height: 20px; border-radius: 50%; background: #f0dd8b; color: #40513a; font-size: 11px; }
+.knowledge-count-line { margin: 15px 0 22px; font-size: 12px; }
+.knowledge-document, .knowledge-own, .knowledge-review, .knowledge-answer { min-width: 0; overflow-wrap: anywhere; }
+.knowledge-document > h2, .knowledge-review > h2 { margin: 17px 0 9px; }
+.knowledge-document > .source-meta { display: block; margin: 13px 0; }
+.knowledge-quote { margin: 18px 0; padding: 15px 17px; border-left: 3px solid #b7c993; background: #f4f7ed; border-radius: 0 9px 9px 0; font-size: 13px; line-height: 1.9; overflow-wrap: anywhere; }
+.knowledge-quote small { display: block; margin-top: 9px; color: var(--muted); font-size: 11px; }
+.knowledge-answer form { margin-top: 24px; }
+.knowledge-answer-result { margin-top: 22px; }
+.knowledge-answer-result > .preserve-text { margin: 22px 0; }
+.knowledge-citation { border-top: 1px solid var(--line); padding-top: 20px; margin-top: 23px; min-width: 0; }
+.knowledge-citation .source-meta { display: block; margin-top: 9px; }
+.knowledge-form-grid, .knowledge-version-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 19px; }
+.knowledge-form-grid > *, .knowledge-version-grid > * { min-width: 0; }
+.knowledge-audience { border: 0; padding: 0; margin: 24px 0; }
+.knowledge-audience legend { margin-bottom: 13px; color: var(--forest); font-size: 14px; font-weight: 600; }
+.knowledge-members { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 18px; margin-top: 15px; padding: 6px 17px; background: #f7f8ef; border: 1px solid var(--line); border-radius: 12px; }
+.knowledge-members .checkbox-field { margin: 10px 0; overflow-wrap: anywhere; }
+.knowledge-version-grid { margin: 22px 0; align-items: start; }
+.knowledge-version-grid > .card { padding: 22px; }
+.knowledge-version-grid h3, .knowledge-version-grid h4 { margin-bottom: 13px; }
+.knowledge-version-grid details { margin: 20px 0; }
+.knowledge-version-grid summary { cursor: pointer; color: var(--forest); margin-bottom: 14px; }
+.knowledge-version-grid .preserve-text { max-height: 350px; overflow: auto; font-size: 13px; line-height: 1.9; }
+.knowledge-review-record { padding: 13px 0; border-top: 1px solid var(--line); margin-top: 14px; font-size: 12px; }
+.knowledge-review-body { padding: 20px; margin: 20px 0; background: #f8f9f0; border: 1px solid var(--line); border-radius: 12px; max-height: 45vh; overflow: auto; font-size: 14px; line-height: 1.9; }
+.knowledge-source-lines { padding: 14px 0; margin: 20px 0; background: #fafbf4; border: 1px solid var(--line); border-radius: 12px; max-height: 50vh; overflow: auto; }
+.knowledge-source-lines > div { display: grid; grid-template-columns: 38px minmax(0, 1fr); gap: 12px; padding: 5px 18px; font-size: 14px; line-height: 1.9; }
+.knowledge-source-lines .highlighted { background: #edf2d6; }
+.knowledge-line-number { color: #8c967f; font-size: 11px; text-align: right; padding-top: 3px; user-select: none; }
+@media (max-width: 760px) {
+  .knowledge-tabs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+  .knowledge-tabs .button { padding: 11px 9px; font-size: 12px; justify-content: center; }
+  .knowledge-form-grid, .knowledge-version-grid, .knowledge-members { grid-template-columns: 1fr; }
+  .knowledge-form-grid { gap: 0; }
+  .knowledge-source-lines > div { grid-template-columns: 23px minmax(0, 1fr); gap: 9px; padding: 5px 11px; font-size: 13px; }
+  .knowledge-version-grid > .card { padding: 18px 15px; }
+  .knowledge-review-body { padding: 16px 14px; }
+}
