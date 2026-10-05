@@ -360,3 +360,40 @@ class ModelKnowledgeAnswer(Body):
         if self.answer.strip() and not self.citation_ids:
             raise ValueError("非空回答必须引用本次资料")
         return self
+
+
+class CorrectionText(Body):
+    text: str = Field(min_length=1, max_length=2000)
+    consent: Literal[True]
+
+    @field_validator("text")
+    @classmethod
+    def safe_text(cls, value):
+        if not value.strip() or re.search(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f\ud800-\udfff]", value):
+            raise ValueError("请填写普通非空文字")
+        return value
+
+    @field_validator("consent", mode="before")
+    @classmethod
+    def explicit_consent(cls, value):
+        if value is not True:
+            raise ValueError("请本人明确确认分享范围")
+        return value
+
+
+class CorrectionCreate(CorrectionText):
+    document_id: str = Field(min_length=1, max_length=36)
+    revision_id: str = Field(min_length=1, max_length=36)
+    access_epoch: int = Field(ge=1)
+    expected_recipient_id: str = Field(min_length=1, max_length=36)
+
+    @field_validator("document_id", "revision_id", "expected_recipient_id")
+    @classmethod
+    def safe_ids(cls, value):
+        if re.search(r"[\x00-\x1f\x7f\ud800-\udfff]", value):
+            raise ValueError("标识必须为有效文字")
+        return value
+
+
+class CorrectionRespond(CorrectionText, Version):
+    pass

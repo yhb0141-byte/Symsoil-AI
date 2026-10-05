@@ -479,7 +479,7 @@ onUnmounted(() => { if (idleTimer) clearInterval(idleTimer); if (noticeTimer) cl
       <p class="muted">社区掌握 · 本地协作 · 本人确认</p>
     </section>
     <main class="login-card">
-      <div class="badge warning">R0.3 · 合成数据开发版</div>
+      <div class="badge warning">R0.4 · 合成数据开发版</div>
       <h2>{{ loginMode === 'login' ? '回到社区工作台' : '使用一次性邀请加入' }}</h2>
       <p class="muted">本轮仅供开发测试。议题、回应与任务均不代表真实社区决定。本地模型建议默认关闭，人工流程可独立使用。</p>
       <div v-if="authError" class="notice info" role="alert">{{ authError }}</div>
@@ -503,7 +503,7 @@ onUnmounted(() => { if (idleTimer) clearInterval(idleTimer); if (noticeTimer) cl
     </aside>
     <div class="workspace">
       <header class="topbar"><div><span class="desktop-only muted">共壤 / </span><span>{{ pageTitle }}</span></div><div class="inline-actions"><span class="badge">本地工作台</span><span class="user-name">{{ user.display_name }}</span><button class="button ghost icon-button" aria-label="退出账号" @click="logout()"><Icon name="logout" /></button></div></header>
-      <div class="synthetic-banner"><span><strong>R0.3 合成测试</strong> · 当前记录不构成真实社区决定或项目授权。</span><span>{{ aiStatus?.available ? `本地模型：${aiStatus.model}` : aiStatus ? aiStatus.enabled ? '本地模型未就绪 · 可人工处理' : '本地模型关闭 · 可人工处理' : '模型状态待检查' }}</span></div>
+      <div class="synthetic-banner"><span><strong>R0.4 合成测试</strong> · 当前记录不构成真实社区决定或项目授权。</span><span>{{ aiStatus?.available ? `本地模型：${aiStatus.model}` : aiStatus ? aiStatus.enabled ? '本地模型未就绪 · 可人工处理' : '本地模型关闭 · 可人工处理' : '模型状态待检查' }}</span></div>
       <main class="main-content">
         <div v-if="notice" class="notice success" role="status">{{ notice }}</div>
         <div v-if="pageError" class="notice error" role="alert"><p>{{ pageError }}</p><button class="button secondary" :disabled="loading" @click="selectedTopic ? loadTopic(selectedTopic.id) : loadPage()">重新载入</button></div>

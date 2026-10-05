@@ -264,3 +264,22 @@ class KnowledgeReview(Base):
     decision: Mapped[str] = mapped_column(String(30))
     reason: Mapped[str] = mapped_column(Text)
     created_at: Mapped[str] = mapped_column(String(40))
+
+
+class KnowledgeCorrection(Base):
+    __tablename__ = "knowledge_corrections"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    document_id: Mapped[str] = mapped_column(ForeignKey("knowledge_documents.id"), index=True)
+    revision_id: Mapped[str] = mapped_column(ForeignKey("knowledge_revisions.id"))
+    document_version: Mapped[int] = mapped_column(Integer)
+    source_access_epoch: Mapped[int] = mapped_column(Integer)
+    requester_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    recipient_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    text: Mapped[str] = mapped_column(Text)
+    response: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(String(20), default="submitted")
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    created_at: Mapped[str] = mapped_column(String(40))
+    updated_at: Mapped[str] = mapped_column(String(40))
+    responded_at: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    withdrawn_at: Mapped[str | None] = mapped_column(String(40), nullable=True)
