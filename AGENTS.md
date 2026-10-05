@@ -2,6 +2,8 @@
 
 Build SymSoil as a community-controlled local application. Read docs/product/PRD.md and the current release scope before changing behavior.
 
+Current increment: R0.2; read docs/development/R02_SCOPE.md and API_CONTRACT_R02.md alongside the original R0 contract. The uploaded implementation-plan alignment is docs/product/IMPLEMENTATION_ALIGNMENT.md. R0.2 is still synthetic development, not a complete R1 release.
+
 - R0 is a synthetic-data development release. Never imply that a synthetic acceptance or discussion is a real community decision.
 - Accuracy confirmation, sharing permission, stance, approval, and task acceptance are different operations.
 - Enforce authentication, object access, version checks, and idempotency on the server.

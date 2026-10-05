@@ -68,11 +68,17 @@ def authenticate(db, request):
         session.revoked = True
         db.commit()
         raise HTTPException(401, "会话已失效，请重新登录")
-    if request.method not in ("GET", "HEAD", "OPTIONS"):
+    read_request = request.method in ("GET", "HEAD", "OPTIONS")
+    if not read_request:
         require_origin(request)
-        csrf = request.headers.get("X-CSRF-Token", "")
-        if not csrf or not secrets.compare_digest(csrf, session.csrf_token):
-            raise HTTPException(403, "CSRF校验失败")
+    # The browser keeps this proof only in memory. A cookie alone must never
+    # bootstrap a new page/session or read private data after a failed offline
+    # logout. Login is the only unauthenticated endpoint that supplies a proof.
+    proof = request.headers.get("X-CSRF-Token", "")
+    if not proof or not secrets.compare_digest(proof.encode("utf-8"), session.csrf_token.encode("utf-8")):
+        if read_request:
+            raise HTTPException(401, "会话证明已失效，请重新登录")
+        raise HTTPException(403, "CSRF校验失败")
     # The guarded SQL write at final commit must not resurrect a revoked session.
     request.state.auth_session = session
     request.state.user = user

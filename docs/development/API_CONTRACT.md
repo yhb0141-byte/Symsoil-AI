@@ -1,6 +1,8 @@
 # R0 implementation contract
 
-All endpoints use `/api/v1`. JSON errors: `{detail: string}`. Cookie session authentication; `GET /auth/me` and `POST /auth/login` return `{user, csrf_token}`. Send `X-CSRF-Token` on authenticated mutations. Send `Idempotency-Key` on confirm, share, stance, and invitation response. No browser persistent auth token.
+This is the original R0 endpoint baseline. [R0.2 additions](API_CONTRACT_R02.md) override authentication reads and extend expression/sharing flows; use both documents together.
+
+All endpoints use `/api/v1`. JSON errors: `{detail: string}`. Authentication requires a Cookie plus the in-memory `X-CSRF-Token` on **all** authenticated requests, including GET. Only explicit `POST /auth/login` bootstraps `{user, csrf_token}`; `GET /auth/me` returns that shape only when the caller already supplies the proof. Send `Idempotency-Key` on confirm, share, stance, invitation response, expression choice, and understanding actions. No browser persistent auth token.
 
 User: `{id, username, display_name, role, active}`. Roles: admin, facilitator, member. IDs are strings. UTC ISO timestamps.
 

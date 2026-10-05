@@ -28,15 +28,19 @@ export async function endSession(): Promise<void> {
 export function mutationKey(): string {
   return globalThis.crypto?.randomUUID?.() ?? `r0-${Date.now()}-${Math.random().toString(36).slice(2)}`
 }
-export async function request<T>(path: string, method = 'GET', body?: unknown, idempotencyKey?: string): Promise<T> {
+export async function request<T>(path: string, method = 'GET', body?: unknown, idempotencyKey?: string, timeoutMs = 20000, externalSignal?: AbortSignal): Promise<T> {
   const headers: Record<string, string> = { Accept: 'application/json' }
   if (body !== undefined) headers['Content-Type'] = 'application/json'
-  if (method !== 'GET' && csrfToken) headers['X-CSRF-Token'] = csrfToken
+  // Even reads require the current page's in-memory session proof; cookies alone cannot reopen private data.
+  if (csrfToken) headers['X-CSRF-Token'] = csrfToken
   if (idempotencyKey) headers['Idempotency-Key'] = idempotencyKey
   const requestGeneration = generation
   const controller = new AbortController()
   controllers.add(controller)
-  const timeout = setTimeout(() => controller.abort(), 20000)
+  const abortFromCaller = () => controller.abort()
+  externalSignal?.addEventListener('abort', abortFromCaller, { once: true })
+  if (externalSignal?.aborted) controller.abort()
+  const timeout = setTimeout(() => controller.abort(), timeoutMs)
   try {
     const result = await fetch(`/api/v1${path}`, { method, headers, credentials: 'same-origin', cache: 'no-store', body: body === undefined ? undefined : JSON.stringify(body), signal: controller.signal })
     const data = await result.json().catch(() => ({}))
@@ -50,7 +54,7 @@ export async function request<T>(path: string, method = 'GET', body?: unknown, i
   } catch (error) {
     if (error instanceof ApiError) throw error
     throw new ApiError(0, '暂时无法连接社区服务器。请检查连接后重试；当前操作未收到成功确认。')
-  } finally { clearTimeout(timeout); controllers.delete(controller) }
+  } finally { clearTimeout(timeout); externalSignal?.removeEventListener('abort', abortFromCaller); controllers.delete(controller) }
 }
 export function errorText(error: unknown): string {
   if (error instanceof ApiError && error.status === 409) return '内容或方案版本已变化，或重复请求内容不一致。请重新载入并核对，再由本人确认。'

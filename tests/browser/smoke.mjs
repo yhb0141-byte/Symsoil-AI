@@ -70,7 +70,7 @@ try {
   await qiao.getByRole('button', { name: '预览并选择分享' }).click()
   await qiao.getByLabel('分享到哪个议题').selectOption({ label: '合成演示：周末公共场地工作坊' })
   await qiao.getByRole('checkbox').check()
-  await qiao.getByRole('button', { name: '分享这版原话到所选议题' }).click()
+  await qiao.getByRole('button', { name: '分享预览中的唯一正文' }).click()
   await waitNotice(qiao, '已按预览')
   await lin.getByRole('button', { name: '刷新版本', exact: true }).click()
   await lin.locator('.viewpoint').filter({ hasText: '我暂时不接受清理任务' }).waitFor()

@@ -2,12 +2,14 @@
 import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
 import Icon from './components/Icon.vue'
 import Modal from './components/Modal.vue'
+import UnderstandingList from './components/UnderstandingList.vue'
+import { createCurrentRecords } from './lib/currentRecords'
 import { ApiError, clearSession, endSession, errorText, mutationKey, onUnauthorized, request, setSession } from './lib/api'
-import { dateText, invitationLabels, isConfirmed, roleLabels, stanceLabels, validStance } from './lib/domain'
-import type { AuditEvent, Dashboard, Document, Invitation, InvitationResponse, Member, Option, Session, SessionStatus, StanceKind, Topic, TopicDetail, User, Utterance } from './lib/types'
+import { candidateLabels, choiceLabels, confirmedCandidate, dateText, invitationLabels, isConfirmed, roleLabels, stanceLabels, understandingLabels, validStance } from './lib/domain'
+import type { AiStatus, AuditEvent, Candidate, CandidateKind, Dashboard, Document, ExpressionDetail, Invitation, InvitationResponse, Member, ModelSuggestions, Option, RephraseChoice, Session, SessionStatus, StanceKind, Topic, TopicDetail, Understanding, UnderstandingStatus, User, Utterance, Viewpoint } from './lib/types'
 
 type Page = 'home' | 'documents' | 'expressions' | 'topics' | 'tasks' | 'memory' | 'permissions' | 'admin'
-type Dialog = 'document' | 'expression' | 'share' | 'revoke' | 'topic' | 'participants' | 'option' | 'stance' | 'invitation' | 'response' | 'help' | 'admin-invite' | 'freeze' | null
+type Dialog = 'document' | 'expression' | 'share' | 'revoke' | 'topic' | 'participants' | 'option' | 'stance' | 'invitation' | 'response' | 'help' | 'admin-invite' | 'freeze' | 'expression-review' | 'candidate' | 'understanding' | 'understanding-response' | null
 const entries: { id: Page; title: string; subtitle: string; icon: string }[] = [
   { id: 'documents', title: '查资料', subtitle: '找到来源，也找到下一步', icon: 'book' },
   { id: 'expressions', title: '说想法', subtitle: '先写给自己，再选择分享', icon: 'pen' },
@@ -45,6 +47,26 @@ const selectedOption = ref<Option | null>(null)
 const selectedInvitation = ref<Invitation | null>(null)
 const freezeUser = ref<User | null>(null)
 const query = ref('')
+const expressionDetail = ref<ExpressionDetail | null>(null)
+const selectedCandidate = ref<Candidate | null>(null)
+const shareRepresentation = ref<'original' | 'candidate'>('original')
+const candidateForm = ref<{ kind: CandidateKind; text: string; context: string; target_context: string; purpose: string }>({ kind: 'everyday', text: '', context: '', target_context: '', purpose: '' })
+const aiContext = ref({ context: '', target_context: '', purpose: '' })
+const aiStatus = ref<AiStatus | null>(null)
+const aiError = ref('')
+const aiLoading = ref(false)
+const modelSuggestions = ref<ModelSuggestions | null>(null)
+const modelContext = ref({ context: '', target_context: '', purpose: '' })
+const suggestionSnapshot = ref<{ token: string; utterance_version: number; kind: CandidateKind; text: string; context: string; target_context: string; purpose: string } | null>(null)
+const currentUnderstandings = createCurrentRecords<Understanding>(() => request<Understanding[]>('/understandings'))
+const understandings = currentUnderstandings.items
+const understandingsError = ref('')
+const selectedViewpoint = ref<Viewpoint | null>(null)
+const understandingText = ref('')
+const selectedUnderstanding = ref<Understanding | null>(null)
+const understandingSource = ref<Viewpoint | null>(null)
+const understandingForm = ref<{ status: Exclude<UnderstandingStatus, 'pending'>; correction: string }>({ status: 'accurate', correction: '' })
+
 const expressionForm = ref({ title: '', text: '' })
 const topicForm = ref({ title: '', description: '', scope: '' })
 const optionForm = ref({ title: '', description: '', cost: '', labor: '', risks: '' })
@@ -63,11 +85,20 @@ let idleTimer: ReturnType<typeof setInterval> | undefined
 let noticeTimer: ReturnType<typeof setTimeout> | undefined
 let heartbeatTimer: ReturnType<typeof setInterval> | undefined
 let heartbeatBusy = false
+let modelRequestController: AbortController | null = null
 const canCreateTopic = computed(() => user.value?.role === 'admin' || user.value?.role === 'facilitator')
 const pageTitle = computed(() => page.value === 'home' ? '社区工作台' : page.value === 'admin' ? '账号管理' : entries.find(entry => entry.id === page.value)?.title ?? '社区工作台')
 const myPending = computed(() => invitations.value.filter(item => item.invitee_id === user.value?.id && ['pending', 'negotiating'].includes(item.status)))
 const participantCandidates = computed(() => members.value.filter(member => !selectedTopic.value?.participants.includes(member.id)))
 const shareTarget = computed(() => topics.value.find(topic => topic.id === shareTopicId.value))
+const selectedConfirmedCandidate = computed(() => confirmedCandidate(expressionDetail.value))
+const shareText = computed(() => shareRepresentation.value === 'candidate' ? selectedConfirmedCandidate.value?.text ?? '' : selectedExpression.value?.text ?? '')
+const sourceProofMatches = computed(() => {
+  const proof = suggestionSnapshot.value, draft = candidateForm.value
+  return !!proof && proof.utterance_version === expressionDetail.value?.utterance.version && proof.kind === draft.kind && proof.text === draft.text && proof.context === draft.context && proof.target_context === draft.target_context && proof.purpose === draft.purpose
+})
+const incomingUnderstandings = computed(() => understandings.value.filter(item => item.author_id === user.value?.id && item.status === 'pending'))
+const modalTitle = computed(() => ({ help: '求助与人工路径', document: '资料原文', expression: selectedExpression.value ? '编辑我的原话' : '写下我的想法', share: '预览本次唯一正文分享', revoke: '撤回表达分享', topic: '发起合成测试议题', participants: '添加议题参与者', option: '补充备选方案', stance: '核对并表达我的立场', invitation: '邀请本人承担任务', response: '核对任务条款', 'admin-invite': '建立一次性加入邀请', freeze: '冻结本地账号', 'expression-review': '原话与候选转述 · 仅本人可见', candidate: selectedCandidate.value ? '修改私人候选' : '保存私人候选', understanding: '我理解的是…', 'understanding-response': '理解核对 · 仅双方可见' }[dialog.value ?? 'help']))
 const currentStance = computed(() => selectedOption.value?.stances.find(item => item.member_id === user.value?.id))
 
 function showNotice(message: string) {
@@ -76,6 +107,7 @@ function showNotice(message: string) {
   noticeTimer = setTimeout(() => { notice.value = '' }, 6500)
 }
 function resetPrivateMemory(reason = '') {
+  modelRequestController?.abort(); modelRequestController = null
   clearSession()
   user.value = null
   dashboard.value = null
@@ -89,6 +121,10 @@ function resetPrivateMemory(reason = '') {
   responseForm.value = { response: 'accepted', note: '' }; stanceForm.value = { stance: 'need_info', condition: '' }
   adminForm.value = { username: '', display_name: '', role: 'member' }; login.value = { username: '', password: '', token: '' }
   inviteResult.value = null; shareTopicId.value = ''; shareConsent.value = false; query.value = ''; participantId.value = ''; helpSubject.value = '参与与人工协助'
+  expressionDetail.value = null; selectedCandidate.value = null; shareRepresentation.value = 'original'
+  candidateForm.value = { kind: 'everyday', text: '', context: '', target_context: '', purpose: '' }; aiContext.value = { context: '', target_context: '', purpose: '' }
+  aiStatus.value = null; aiError.value = ''; aiLoading.value = false; modelSuggestions.value = null; modelContext.value = { context: '', target_context: '', purpose: '' }; suggestionSnapshot.value = null
+  currentUnderstandings.clear(); understandingsError.value = ''; selectedViewpoint.value = null; understandingText.value = ''; selectedUnderstanding.value = null; understandingSource.value = null; understandingForm.value = { status: 'accurate', correction: '' }
   mutationKeys.clear(); dialog.value = null; pageError.value = ''; formError.value = ''; notice.value = ''
   page.value = 'home'; authError.value = reason
   document.title = '共壤 · 社区工作台'
@@ -96,10 +132,23 @@ function resetPrivateMemory(reason = '') {
 onUnauthorized(() => resetPrivateMemory('会话已结束。请重新登录，未提交的内容已从页面清除。'))
 function closeDialog() {
   if (busy.value) return
-  dialog.value = null; formError.value = ''; inviteResult.value = null
+  if (dialog.value === 'candidate' && expressionDetail.value) {
+    candidateForm.value = { kind: 'everyday', text: '', context: '', target_context: '', purpose: '' }; suggestionSnapshot.value = null; selectedCandidate.value = null; dialog.value = 'expression-review'; formError.value = ''; return
+  }
+  dialog.value = null; expressionDetail.value = null; modelSuggestions.value = null; aiError.value = ''; aiContext.value = { context: '', target_context: '', purpose: '' }
+  suggestionSnapshot.value = null; selectedCandidate.value = null; selectedViewpoint.value = null; understandingText.value = ''; selectedUnderstanding.value = null; understandingSource.value = null
+  formError.value = ''; inviteResult.value = null
   expressionForm.value = { title: '', text: '' }
   selectedExpression.value = null; selectedInvitation.value = null; selectedOption.value = null
   shareConsent.value = false
+}
+async function reloadAfterConflict() {
+  const original = ['expression', 'expression-review', 'candidate', 'share'].includes(dialog.value ?? '') ? expressionDetail.value?.utterance ?? selectedExpression.value : null
+  const topicId = selectedTopic.value?.id
+  dialog.value = null; closeDialog()
+  if (original) await reviewExpression(original)
+  else if (topicId) await loadTopic(topicId)
+  else await loadPage()
 }
 function openHelp(subject = '参与与人工协助') { helpSubject.value = subject; dialog.value = 'help'; formError.value = '' }
 function openDialog(name: Dialog) { formError.value = ''; dialog.value = name }
@@ -115,7 +164,7 @@ async function authenticate() {
     }
     const session = await request<Session>('/auth/login', 'POST', { username: login.value.username.trim(), password: login.value.password })
     setSession(session); user.value = session.user; activityAt = Date.now(); login.value.password = ''
-    await loadPage('home')
+    await loadPage('home'); await refreshAiStatus()
   } catch (error) { authError.value = errorText(error) }
   finally { busy.value = false }
 }
@@ -137,11 +186,14 @@ async function loadPage(target = page.value) {
   page.value = target; loading.value = true; pageError.value = ''; selectedTopic.value = null
   document.title = `${pageTitle.value} · 共壤`
   try {
-    if (target === 'home') dashboard.value = await request<Dashboard>('/dashboard')
+    if (target === 'home') {
+      const results = await Promise.all([request<Dashboard>('/dashboard'), currentUnderstandings.refresh()])
+      dashboard.value = results[0]; understandingsError.value = ''
+    }
     else if (target === 'documents') documents.value = await request<Document[]>(`/documents${query.value.trim() ? `?q=${encodeURIComponent(query.value.trim())}` : ''}`)
     else if (target === 'expressions') {
-      const results = await Promise.all([request<Utterance[]>('/utterances'), request<Topic[]>('/topics')])
-      expressions.value = results[0]; topics.value = results[1]
+      const results = await Promise.all([request<Utterance[]>('/utterances'), request<Topic[]>('/topics'), currentUnderstandings.refresh()])
+      expressions.value = results[0]; topics.value = results[1]; understandingsError.value = ''
     } else if (target === 'topics') topics.value = await request<Topic[]>('/topics')
     else if (target === 'tasks') invitations.value = await request<Invitation[]>('/invitations')
     else if (target === 'permissions') {
@@ -170,10 +222,10 @@ async function mutate<T>(path: string, body?: unknown, method = 'POST', keyed = 
     throw error
   }
 }
-async function perform(action: () => Promise<void>, success: string) {
+async function perform(action: () => Promise<void>, success: string, nextDialog: Dialog = null) {
   if (busy.value) return
   busy.value = true; formError.value = ''; pageError.value = ''
-  try { await action(); dialog.value = null; showNotice(success) }
+  try { await action(); dialog.value = nextDialog; showNotice(success) }
   catch (error) { if (dialog.value) formError.value = errorText(error); else pageError.value = errorText(error) }
   finally { busy.value = false }
 }
@@ -182,10 +234,16 @@ function editExpression(item?: Utterance) {
   expressionForm.value = { title: item?.title ?? '', text: item?.text ?? '' }
   openDialog('expression')
 }
+async function refreshUnderstandingsAfterSourceChange() {
+  selectedUnderstanding.value = null; understandingSource.value = null; understandingsError.value = ''
+  try { await currentUnderstandings.refresh(true) }
+  catch (error) { if (user.value) { understandingsError.value = `表达操作已由服务器保存，旧理解核对已从页面清除；当前列表暂时无法刷新。${errorText(error)}`; pageError.value = understandingsError.value } }
+}
 async function saveExpression() {
   await perform(async () => {
     const item = selectedExpression.value
     await mutate<Utterance>(item ? `/utterances/${item.id}` : '/utterances', { ...expressionForm.value, ...(item ? { object_version: item.version } : {}) }, item ? 'PATCH' : 'POST')
+    if (item) await refreshUnderstandingsAfterSourceChange()
     expressions.value = await request<Utterance[]>('/utterances'); expressionForm.value = { title: '', text: '' }; selectedExpression.value = null
   }, '私稿已保存。此次保存没有分享给任何人；新版需要本人重新确认。')
 }
@@ -193,16 +251,123 @@ async function confirmExpression(item: Utterance) {
   await perform(async () => {
     await mutate(`/utterances/${item.id}/confirmations`, { object_version: item.version }, 'POST', true)
     expressions.value = await request<Utterance[]>('/utterances')
-  }, `已确认第 ${item.version} 版原话准确。尚未因此增加分享权限。`)
+    if (expressionDetail.value?.utterance.id === item.id) setExpressionDetail(await request<ExpressionDetail>(`/utterances/${item.id}/expression`))
+  }, `已确认第 ${item.version} 版原话准确。尚未因此增加分享权限。`, dialog.value === 'expression-review' ? 'expression-review' : null)
 }
-function prepareShare(item: Utterance) { selectedExpression.value = item; shareTopicId.value = ''; shareConsent.value = false; openDialog('share') }
+async function prepareShare(item: Utterance) {
+  if (busy.value) return
+  busy.value = true; formError.value = ''; pageError.value = ''
+  try {
+    setExpressionDetail(await request<ExpressionDetail>(`/utterances/${item.id}/expression`))
+    topics.value = await request<Topic[]>('/topics')
+    shareTopicId.value = ''; shareConsent.value = false; shareRepresentation.value = 'original'; openDialog('share')
+  } catch (error) { if (dialog.value) formError.value = errorText(error); else pageError.value = errorText(error) }
+  finally { busy.value = false }
+}
 async function shareExpression() {
   if (!selectedExpression.value || !shareTarget.value || !shareConsent.value) return
   const item = selectedExpression.value
   await perform(async () => {
-    await mutate(`/utterances/${item.id}/share`, { object_version: item.version, topic_id: shareTopicId.value }, 'POST', true)
+    const chosen = selectedConfirmedCandidate.value
+    if (shareRepresentation.value === 'candidate' && (!chosen || !expressionDetail.value?.choice)) throw new Error('请先核对并确认具体候选版本。')
+    await mutate(`/utterances/${item.id}/share`, { object_version: item.version, topic_id: shareTopicId.value, representation: shareRepresentation.value, ...(shareRepresentation.value === 'candidate' && chosen ? { candidate_id: chosen.id, candidate_version: chosen.version, choice_version: expressionDetail.value?.choice?.version } : {}) }, 'POST', true)
+    await refreshUnderstandingsAfterSourceChange()
     expressions.value = await request<Utterance[]>('/utterances'); selectedExpression.value = null; shareConsent.value = false
-  }, '已按预览将这一版原话分享给指定议题参与者。可在“我的权限”撤回。')
+  }, '已按预览分享唯一正文给所选议题参与者。其他私人原话、语境和候选均未随附；可在“我的权限”撤回。')
+}
+function setExpressionDetail(detail: ExpressionDetail) {
+  expressionDetail.value = detail; selectedExpression.value = detail.utterance
+  const index = expressions.value.findIndex(item => item.id === detail.utterance.id)
+  if (index >= 0) expressions.value[index] = detail.utterance
+}
+async function reviewExpression(item: Utterance) {
+  if (busy.value) return
+  busy.value = true; pageError.value = ''; formError.value = ''
+  try { setExpressionDetail(await request<ExpressionDetail>(`/utterances/${item.id}/expression`)); modelSuggestions.value = null; aiContext.value = { context: '', target_context: '', purpose: '' }; aiError.value = ''; openDialog('expression-review') }
+  catch (error) { pageError.value = errorText(error) }
+  finally { busy.value = false }
+}
+function editCandidate(candidate?: Candidate) {
+  if (!expressionDetail.value) return
+  selectedCandidate.value = candidate ?? null; suggestionSnapshot.value = null
+  const availableKind = expressionDetail.value.candidates.some(item => item.kind === 'everyday') ? 'discussion' : 'everyday'
+  candidateForm.value = { kind: candidate?.kind ?? availableKind, text: candidate?.text ?? '', context: candidate?.context ?? '', target_context: candidate?.target_context ?? '', purpose: candidate?.purpose ?? '' }
+  openDialog('candidate')
+}
+function useModelSuggestion(suggestion: ModelSuggestions['candidates'][number]) {
+  if (!expressionDetail.value) return
+  const existing = expressionDetail.value.candidates.find(candidate => candidate.kind === suggestion.kind)
+  selectedCandidate.value = existing ?? null
+  candidateForm.value = { kind: suggestion.kind, text: suggestion.text, ...aiContext.value }
+  suggestionSnapshot.value = existing ? null : { token: suggestion.suggestion_token, utterance_version: modelSuggestions.value?.utterance_version ?? expressionDetail.value.utterance.version, kind: suggestion.kind, text: suggestion.text, ...modelContext.value }
+  openDialog('candidate')
+}
+async function saveCandidate(asManual = false) {
+  const detail = expressionDetail.value
+  if (!detail) return
+  const draft = candidateForm.value, selected = selectedCandidate.value
+  await perform(async () => {
+    const body = { object_version: detail.utterance.version, text: draft.text, context: draft.context, target_context: draft.target_context, purpose: draft.purpose }
+    const updated = selected ? await mutate<ExpressionDetail>(`/utterances/${detail.utterance.id}/candidates/${selected.id}`, { ...body, candidate_version: selected.version }, 'PATCH') : await mutate<ExpressionDetail>(`/utterances/${detail.utterance.id}/candidates`, { ...body, kind: draft.kind, ...(!asManual && sourceProofMatches.value ? { suggestion_token: suggestionSnapshot.value?.token } : {}) })
+    setExpressionDetail(updated); await refreshUnderstandingsAfterSourceChange(); selectedCandidate.value = null; suggestionSnapshot.value = null
+    candidateForm.value = { kind: 'everyday', text: '', context: '', target_context: '', purpose: '' }
+  }, '私人候选已保存，尚未经本人确认，也没有分享。修改已确认候选会使旧选择与分享失效。', 'expression-review')
+}
+async function selectRephrase(choice: RephraseChoice, candidate?: Candidate) {
+  if (!expressionDetail.value) return
+  const detail = expressionDetail.value
+  await perform(async () => {
+    setExpressionDetail(await mutate<ExpressionDetail>(`/utterances/${detail.utterance.id}/choice`, { object_version: detail.utterance.version, choice_version: detail.choice?.version ?? 0, choice, ...(candidate ? { candidate_id: candidate.id, candidate_version: candidate.version } : {}) }, 'POST', true))
+    await refreshUnderstandingsAfterSourceChange()
+  }, choice === 'candidate' ? '已由本人确认所选候选版本准确。未增加分享权限；分享仍需独立预览。' : choice === 'original_only' ? '已选择只使用原话；不会自动分享。' : '已记录拒绝现有转述。你仍可保留原话、继续参与，或以后主动修改选择。', 'expression-review')
+}
+async function refreshAiStatus() {
+  if (!user.value) return
+  try { aiStatus.value = await request<AiStatus>('/ai/status'); aiError.value = '' }
+  catch (error) { if (user.value) { aiStatus.value = null; aiError.value = errorText(error) } }
+}
+async function generateSuggestions() {
+  if (!expressionDetail.value || aiLoading.value || busy.value) return
+  aiLoading.value = true; busy.value = true; aiError.value = ''; modelSuggestions.value = null
+  const controller = new AbortController(); modelRequestController = controller
+  try {
+    const suppliedContext = { ...aiContext.value }
+    const result = await request<ModelSuggestions>(`/utterances/${expressionDetail.value.utterance.id}/suggestions`, 'POST', { object_version: expressionDetail.value.utterance.version, ...suppliedContext }, undefined, 65000, controller.signal)
+    if (!expressionDetail.value || result.utterance_version !== expressionDetail.value.utterance.version) throw new Error('原话版本已变化，请重新载入后再请求建议。')
+    modelSuggestions.value = result; modelContext.value = suppliedContext
+  } catch (error) { if (user.value) aiError.value = controller.signal.aborted ? '已放弃接收这次模型建议，可继续手工填写。模型服务可能仍在处理，本次没有自动保存。' : errorText(error) }
+  finally { aiLoading.value = false; busy.value = false; if (modelRequestController === controller) modelRequestController = null }
+}
+function cancelSuggestions() { modelRequestController?.abort() }
+function prepareUnderstanding(view: Viewpoint) { selectedViewpoint.value = view; understandingText.value = ''; openDialog('understanding') }
+async function sendUnderstanding() {
+  if (!selectedTopic.value || !selectedViewpoint.value) return
+  const topic = selectedTopic.value, view = selectedViewpoint.value
+  await perform(async () => {
+    await mutate<Understanding>(`/topics/${topic.id}/understandings`, { utterance_id: view.id, utterance_version: view.utterance_version, representation: view.representation, ...(view.representation === 'candidate' ? { candidate_id: view.candidate_id, candidate_version: view.candidate_version } : {}), text: understandingText.value }, 'POST', true)
+    await currentUnderstandings.refresh(); selectedViewpoint.value = null; understandingText.value = ''
+  }, '理解核对已发给表达者，正文仅双方可见。是否听懂由表达者核对，不会生成支持票。')
+}
+async function prepareUnderstandingResponse(item: Understanding) {
+  if (busy.value) return
+  busy.value = true; pageError.value = ''; formError.value = ''
+  try {
+    const topic = await request<TopicDetail>(`/topics/${item.topic_id}`)
+    const view = topic.viewpoints.find(viewpoint => viewpoint.id === item.utterance_id && viewpoint.utterance_version === item.utterance_version && viewpoint.representation === item.representation && viewpoint.candidate_id === item.candidate_id && viewpoint.candidate_version === item.candidate_version)
+    if (!view) throw new Error('源观点已经变化或撤回，请刷新私人核对列表。')
+    selectedUnderstanding.value = item; understandingSource.value = view; understandingForm.value = { status: 'accurate', correction: '' }; openDialog('understanding-response')
+  } catch (error) { pageError.value = errorText(error) }
+  finally { busy.value = false }
+}
+function returnToUnderstandingTopic() { const id = selectedUnderstanding.value?.topic_id; closeDialog(); if (id) void loadTopic(id) }
+async function respondUnderstanding() {
+  if (!selectedUnderstanding.value) return
+  const item = selectedUnderstanding.value
+  if (understandingForm.value.status === 'needs_correction' && !understandingForm.value.correction.trim()) { formError.value = '请写明需要修正的内容，保留准确和不准确的部分。'; return }
+  await perform(async () => {
+    await mutate<Understanding>(`/understandings/${item.id}/response`, { object_version: item.version, ...understandingForm.value }, 'POST', true)
+    await currentUnderstandings.refresh(); selectedUnderstanding.value = null; understandingSource.value = null
+  }, '表达者本人核对已保存，仅双方可见。听懂不等于同意，不改变方案立场和任务状态。')
 }
 function prepareRevoke(item: Utterance) { selectedExpression.value = item; openDialog('revoke') }
 async function revokeExpression() {
@@ -210,6 +375,7 @@ async function revokeExpression() {
   const item = selectedExpression.value
   await perform(async () => {
     await mutate(`/utterances/${item.id}/revoke`, { object_version: item.version })
+    await refreshUnderstandingsAfterSourceChange()
     expressions.value = await request<Utterance[]>('/utterances'); selectedExpression.value = null
     if (page.value === 'permissions') audits.value = await request<AuditEvent[]>('/audit')
   }, '分享已撤回，当前议题视图已停止展示。已经被他人看到的内容无法从记忆中撤除。')
@@ -316,9 +482,9 @@ onUnmounted(() => { if (idleTimer) clearInterval(idleTimer); if (noticeTimer) cl
       <p class="muted">社区掌握 · 本地协作 · 本人确认</p>
     </section>
     <main class="login-card">
-      <div class="badge warning">R0 · 合成数据开发版</div>
+      <div class="badge warning">R0.2 · 合成数据开发版</div>
       <h2>{{ loginMode === 'login' ? '回到社区工作台' : '使用一次性邀请加入' }}</h2>
-      <p class="muted">本轮仅供开发测试。议题、回应与任务均不代表真实社区决定；AI 推理尚未上线。</p>
+      <p class="muted">本轮仅供开发测试。议题、回应与任务均不代表真实社区决定。本地模型建议默认关闭，人工流程可独立使用。</p>
       <div v-if="authError" class="notice info" role="alert">{{ authError }}</div>
       <form @submit.prevent="authenticate">
         <label v-if="loginMode === 'login'" class="form-field">用户名<input v-model="login.username" autocomplete="username" required maxlength="64" placeholder="输入本地账号用户名" /></label>
@@ -340,7 +506,7 @@ onUnmounted(() => { if (idleTimer) clearInterval(idleTimer); if (noticeTimer) cl
     </aside>
     <div class="workspace">
       <header class="topbar"><div><span class="desktop-only muted">共壤 / </span><span>{{ pageTitle }}</span></div><div class="inline-actions"><span class="badge">本地工作台</span><span class="user-name">{{ user.display_name }}</span><button class="button ghost icon-button" aria-label="退出账号" @click="logout()"><Icon name="logout" /></button></div></header>
-      <div class="synthetic-banner"><span><strong>R0 合成测试</strong> · 当前记录不构成真实社区决定或项目授权。</span><span>AI 推理未上线</span></div>
+      <div class="synthetic-banner"><span><strong>R0.2 合成测试</strong> · 当前记录不构成真实社区决定或项目授权。</span><span>{{ aiStatus?.available ? `本地模型：${aiStatus.model}` : aiStatus ? aiStatus.enabled ? '本地模型未就绪 · 可人工处理' : '本地模型关闭 · 可人工处理' : '模型状态待检查' }}</span></div>
       <main class="main-content">
         <div v-if="notice" class="notice success" role="status">{{ notice }}</div>
         <div v-if="pageError" class="notice error" role="alert"><p>{{ pageError }}</p><button class="button secondary" :disabled="loading" @click="selectedTopic ? loadTopic(selectedTopic.id) : loadPage()">重新载入</button></div>
@@ -353,6 +519,7 @@ onUnmounted(() => { if (idleTimer) clearInterval(idleTimer); if (noticeTimer) cl
               <template v-if="dashboard?.pending.length"><article v-for="item in dashboard.pending" :key="item.id" class="list-row"><div class="avatar"><Icon name="task" /></div><div class="row-content"><div class="inline-actions"><h3>{{ item.title }}</h3><span class="badge warning">等待本人回应</span></div><p class="muted">{{ item.topic_title }} · 任务条款第 {{ item.version }} 版 · 截止 {{ dateText(item.due_date) }}</p></div><button class="button secondary" @click="prepareResponse(item)">核对与回应</button></article></template>
               <div v-else class="empty-state compact"><Icon name="check" :size="28" /><h3>暂时没有待回应事项</h3><p>你可以看看议题，或先保存一个私人想法。</p></div>
             </section>
+            <template v-if="incomingUnderstandings.length"><div class="section-heading"><div><h2>请我核对的理解</h2><p class="muted">复述仅双方可见。核对听懂不代表支持方案。</p></div></div><UnderstandingList :items="incomingUnderstandings" :current-user-id="user.id" :busy="busy" @open="prepareUnderstandingResponse" /></template>
             <div class="section-heading"><div><h2>从这里开始</h2><p class="muted">六个入口，承接社区里不同的事情。</p></div></div>
             <section class="entry-grid"><button v-for="entry in entries" :key="entry.id" class="entry-card" @click="loadPage(entry.id)"><div class="entry-icon"><Icon :name="entry.icon" :size="25" /></div><h3>{{ entry.title }}<span v-if="entry.id === 'memory'" class="badge quiet">下一阶段</span></h3><p>{{ entry.subtitle }}</p><Icon class="entry-arrow" name="arrow" :size="18" /></button></section>
             <section class="stats-row"><div class="stat"><strong>{{ dashboard?.counts.documents ?? 0 }}</strong><span>可查资料</span></div><div class="stat"><strong>{{ dashboard?.counts.topics ?? 0 }}</strong><span>可见议题</span></div><div class="stat"><strong>{{ dashboard?.counts.utterances ?? 0 }}</strong><span>我的私稿</span></div><div class="stat"><strong>{{ dashboard?.counts.open_invitations ?? 0 }}</strong><span>未完成回应</span></div></section>
@@ -367,10 +534,14 @@ onUnmounted(() => { if (idleTimer) clearInterval(idleTimer); if (noticeTimer) cl
             <div v-else class="card empty-state"><Icon name="book" :size="34" /><h2>没有找到匹配资料</h2><p>试试更短的关键词，或请社区人员帮助查找。</p><button class="button secondary" @click="openHelp('找不到需要的资料')">转人工查找</button></div>
           </template>
           <template v-else-if="page === 'expressions'">
-            <div class="page-heading"><div><p class="eyebrow">先表达，再决定谁能看见</p><h1 id="page-title" tabindex="-1">说想法</h1><p class="muted">你的原话默认只对本人可见。确认准确和允许分享是两次不同操作。</p></div><button class="button primary" @click="editExpression()"><Icon name="plus" />写一个私稿</button></div>
-            <div class="notice info">R0 只处理你亲自填写的原话，尚无 AI 转述或理解核对。可以先线下交流，再自行修订。</div>
+            <div class="page-heading"><div><p class="eyebrow">先表达，再决定谁能看见</p><h1 id="page-title" tabindex="-1">说想法</h1><p class="muted">你的原话、候选与语境默认只对本人可见。本人核对和允许分享是不同操作。</p></div><button class="button primary" @click="editExpression()"><Icon name="plus" />写一个私稿</button></div>
+            <div class="notice info">R0.2 支持最多两种私人候选，以及仅双方可见的理解核对。候选可以手写；本地模型输出始终待本人核对，不自动保存、确认或分享。</div>
+            <div class="ai-status"><div><strong>{{ aiStatus?.available ? '本地模型建议可用' : '人工表达流程可用' }}</strong><p>{{ aiStatus?.reason ?? '尚未读取本地模型状态' }}{{ aiStatus?.model ? ` · ${aiStatus.model}` : '' }}</p></div><button class="button ghost" :disabled="busy" @click="refreshAiStatus()">刷新模型状态</button></div>
+            <div v-if="aiError" class="notice error" role="alert">{{ aiError }}</div>
             <div v-if="!expressions.length" class="card empty-state"><Icon name="pen" :size="34" /><h2>这里还没有你的私稿</h2><p>写下你的想法、担忧或希望。保存后，再决定是否分享。</p><button class="button primary" @click="editExpression()">开始写想法</button></div>
-            <section v-else class="stack"><article v-for="item in expressions" :key="item.id" class="card"><div class="section-heading"><div><p class="eyebrow">我的原话 · 第 {{ item.version }} 版</p><h2>{{ item.title }}</h2></div><span class="badge" :class="isConfirmed(item) ? 'success' : 'warning'">{{ isConfirmed(item) ? '本人已确认准确' : '待本人核对' }}</span></div><p class="preserve-text">{{ item.text }}</p><div class="divider"></div><p class="muted">{{ item.shared_topic_id ? '已分享给指定议题参与者' : '尚未分享 · 仅本人可见' }} · 更新 {{ dateText(item.updated_at) }}</p><div class="inline-actions"><button class="button secondary" :disabled="busy" @click="editExpression(item)">编辑原话</button><button v-if="!isConfirmed(item)" class="button secondary" :disabled="busy" @click="confirmExpression(item)">本人确认这版准确</button><button v-if="isConfirmed(item) && !item.shared_topic_id" class="button primary" :disabled="busy" @click="prepareShare(item)">预览并选择分享</button><button v-if="item.shared_topic_id" class="button danger" :disabled="busy" @click="prepareRevoke(item)">撤回分享</button></div></article></section>
+            <section v-else class="stack"><article v-for="item in expressions" :key="item.id" class="card"><div class="section-heading"><div><p class="eyebrow">我的原话 · 第 {{ item.version }} 版</p><h2>{{ item.title }}</h2></div><span class="badge" :class="isConfirmed(item) ? 'success' : 'warning'">{{ isConfirmed(item) ? '本人已确认准确' : '待本人核对' }}</span></div><p class="preserve-text">{{ item.text }}</p><div class="divider"></div><p class="muted">{{ item.shared_topic_id ? '有一份表达共享给指定议题参与者' : '尚未分享 · 仅本人可见' }} · 更新 {{ dateText(item.updated_at) }}</p><div class="inline-actions"><button class="button secondary" :disabled="busy" @click="editExpression(item)">编辑原话</button><button class="button secondary" :disabled="busy" @click="reviewExpression(item)">原话与转述核对</button><button v-if="!isConfirmed(item)" class="button secondary" :disabled="busy" @click="confirmExpression(item)">本人确认这版准确</button><button v-if="isConfirmed(item) && !item.shared_topic_id" class="button primary" :disabled="busy" @click="prepareShare(item)">预览并选择分享</button><button v-if="item.shared_topic_id" class="button danger" :disabled="busy" @click="prepareRevoke(item)">撤回分享</button></div></article></section>
+            <div class="section-heading"><div><h2>我的理解核对</h2><p class="muted">只展示我发起或需要我回应的当前有效核对。源观点变化后，旧核对停止访问。</p></div><button class="button ghost" :disabled="busy" @click="loadPage('expressions')">刷新核对</button></div>
+            <div v-if="understandingsError" class="notice warning" role="alert">理解核对列表尚未完成读取，请检查连接后点击“刷新核对”。当前不显示旧卡片。</div><UnderstandingList v-else :items="understandings" :current-user-id="user.id" :busy="busy" @open="prepareUnderstandingResponse" />
           </template>
           <template v-else-if="page === 'topics' && !selectedTopic">
             <div class="page-heading"><div><p class="eyebrow">让差异有地方被看见</p><h1 id="page-title" tabindex="-1">看议题</h1><p class="muted">只展示你受邀参与的合成议题。表达立场不等于批准决定。</p></div><button v-if="canCreateTopic" class="button primary" @click="newTopic()"><Icon name="plus" />发起议题</button></div>
@@ -381,12 +552,12 @@ onUnmounted(() => { if (idleTimer) clearInterval(idleTimer); if (noticeTimer) cl
             <button class="button ghost back-button" @click="loadPage('topics')">← 返回议题列表</button>
             <div class="detail-header"><div class="inline-actions"><span class="badge">讨论中</span><span class="badge quiet">合成测试 · v{{ selectedTopic.version }}</span></div><h1 id="page-title" tabindex="-1">{{ selectedTopic.title }}</h1><p class="preserve-text">{{ selectedTopic.description }}</p><div class="key-value"><span>讨论范围</span><strong>{{ selectedTopic.scope }}</strong></div><div class="inline-actions"><button class="button secondary" @click="loadTopic(selectedTopic.id)">刷新版本</button><button class="button ghost" @click="openHelp(`议题协商：${selectedTopic.title}`)">请求人工协助</button></div></div>
             <div class="topic-layout"><div class="stack">
-              <section class="card"><div class="section-heading"><div><h2>已授权分享的观点</h2><p class="muted">只展示本人确认并显式分享的原话版本。</p></div><button class="button ghost" @click="loadPage('expressions')">分享我的想法<Icon name="arrow" :size="16" /></button></div><article v-for="view in selectedTopic.viewpoints" :key="view.id" class="viewpoint"><div class="inline-actions"><div class="avatar small">{{ view.author_name.slice(0, 1) }}</div><strong>{{ view.author_name }}</strong><span class="muted">原话 v{{ view.utterance_version }}</span></div><p class="preserve-text">{{ view.text }}</p><small class="muted">本人确认：{{ dateText(view.confirmed_at) }}</small></article><div v-if="!selectedTopic.viewpoints.length" class="empty-state compact"><p>暂时没有共享观点。未分享的私人原话不会出现在这里。</p></div></section>
+              <section class="card"><div class="section-heading"><div><h2>已授权分享的观点</h2><p class="muted">只展示本人确认并显式分享的唯一正文，不附带私人语境。</p></div><button class="button ghost" @click="loadPage('expressions')">分享我的想法<Icon name="arrow" :size="16" /></button></div><article v-for="view in selectedTopic.viewpoints" :key="view.id" class="viewpoint"><div class="inline-actions"><div class="avatar small">{{ view.author_name.slice(0, 1) }}</div><strong>{{ view.author_name }}</strong><span class="muted">{{ view.representation === 'candidate' ? '本人确认转述' : '本人原话' }} · 源 v{{ view.utterance_version }}{{ view.candidate_version ? ` / 候选 v${view.candidate_version}` : '' }}</span></div><p class="preserve-text">{{ view.text }}</p><small class="muted">本人确认：{{ dateText(view.confirmed_at) }}</small><div v-if="view.author_id !== user.id" class="inline-actions"><button class="button ghost" :disabled="busy" @click="prepareUnderstanding(view)">我来复述，请作者核对</button></div></article><div v-if="!selectedTopic.viewpoints.length" class="empty-state compact"><p>暂时没有共享观点。未分享的私人原话不会出现在这里。</p></div></section>
               <section><div class="section-heading"><div><h2>比较备选方案</h2><p class="muted">保留支持、条件、异议与待核实的信息。</p></div><button class="button secondary" @click="newOption()"><Icon name="plus" />补充方案</button></div><div v-if="!selectedTopic.options.length" class="card empty-state compact"><p>还没有备选方案。可以先写清楚成本、劳动与风险。</p></div><article v-for="option in selectedTopic.options" :key="option.id" class="card option-card"><div class="section-heading"><h3>{{ option.title }}</h3><span class="badge quiet">方案 v{{ option.version }}</span></div><p class="preserve-text">{{ option.description }}</p><dl class="comparison-grid"><div><dt>费用与资源</dt><dd>{{ option.cost || '待补充' }}</dd></div><div><dt>劳动与承担</dt><dd>{{ option.labor || '待补充' }}</dd></div><div><dt>风险与未核实项</dt><dd>{{ option.risks || '待补充' }}</dd></div></dl><div class="divider"></div><h4>参与者的明确立场</h4><ul v-if="option.stances.length" class="stance-list"><li v-for="stance in option.stances" :key="stance.member_id"><span>{{ stance.member_name }}</span><span class="badge">{{ stanceLabels[stance.stance] }}</span><p v-if="stance.condition" class="preserve-text muted">{{ stance.condition }}</p></li></ul><p v-else class="muted">暂无明确立场。没有回应不会计入支持。</p><p class="muted">尚未表达：{{ Math.max(0, selectedTopic.participants.length - option.stances.length) }} 人。R0 不计算共识或正式批准。</p><button class="button primary" @click="prepareStance(option)">{{ option.stances.some(stance => stance.member_id === user?.id) ? '重新核对我的立场' : '表达我的立场' }}</button></article></section>
               <section class="card"><div class="section-heading"><h2>相关任务邀请</h2><button v-if="selectedTopic.owner_id === user.id" class="button secondary" @click="newInvitation()"><Icon name="plus" />邀请承担任务</button></div><article v-for="item in selectedTopic.invitations" :key="item.id" class="list-row"><div class="row-content"><h3>{{ item.title }}</h3><p class="muted">{{ item.invitee_name }} · {{ invitationLabels[item.status] }}</p></div><button class="button ghost" @click="prepareResponse(item)">{{ item.invitee_id === user.id && ['pending', 'negotiating'].includes(item.status) ? '核对与回应' : '查看条款' }}</button></article><p v-if="!selectedTopic.invitations.length" class="muted">没有你可见的任务条款。条款仅发起人与被邀请者可读。</p></section>
             </div><aside class="stack">
               <section class="card"><div class="section-heading"><h2>议题参与者</h2><button v-if="selectedTopic.owner_id === user.id" class="button ghost icon-button" aria-label="添加议题参与者" @click="prepareParticipants()"><Icon name="plus" /></button></div><ul class="participant-list"><li v-for="id in selectedTopic.participants" :key="id"><div class="avatar small">{{ memberName(id).slice(0, 1) }}</div><span>{{ memberName(id) }}</span><span v-if="id === selectedTopic.owner_id" class="badge quiet">发起人</span></li></ul><p class="muted">新增参与者会扩大已共享观点的议题可见范围。</p></section>
-              <section class="card stage-card"><span class="badge warning">下一阶段 · R1</span><h3>正式决定与公共屏</h3><p>R0 尚未实现批准流程、理解核对、公共屏或自动摘要。请由主持人按约定程序组织线下协商，另行核对记录。</p><button class="button secondary" @click="openHelp('正式议事与公共屏替代路径')">查看人工议事路径</button></section>
+              <section class="card stage-card"><span class="badge warning">下一阶段 · R1</span><h3>正式决定与公共屏</h3><p>R0.2 尚未实现正式批准、公共屏或自动摘要。理解核对保持双方私密，不作为支持票。请由主持人按约定程序组织线下协商，另行核对记录。</p><button class="button secondary" @click="openHelp('正式议事与公共屏替代路径')">查看人工议事路径</button></section>
             </aside></div>
           </template>
           <template v-else-if="page === 'tasks'">
@@ -403,8 +574,8 @@ onUnmounted(() => { if (idleTimer) clearInterval(idleTimer); if (noticeTimer) cl
           <template v-else-if="page === 'permissions'">
             <div class="page-heading"><div><p class="eyebrow">看见自己的授权与操作</p><h1 id="page-title" tabindex="-1">我的权限</h1><p class="muted">分享范围、会话和审计，只展示当前账号有权访问的记录。</p></div><button class="button secondary" @click="logout()"><Icon name="logout" />安全退出</button></div>
             <section class="card"><div class="section-heading"><div class="inline-actions"><div class="avatar">{{ user.display_name.slice(0, 1) }}</div><div><h2>{{ user.display_name }}</h2><p class="muted">{{ user.username }}</p></div></div><span class="badge">{{ roleLabels[user.role] }}</span></div><p>账号角色由已授权管理员配置。账号管理员不会因角色自动读到成员未分享的原话。</p><p class="muted">本地部署的系统维护人员仍有底层运维能力，使用应遵守社区的运维访问程序。</p><button v-if="user.role === 'admin'" class="button ghost" @click="loadPage('admin')">进入账号管理<Icon name="arrow" :size="17" /></button></section>
-            <div class="section-heading"><h2>我分享的原话</h2><button class="button ghost" @click="loadPage('expressions')">管理我的私稿<Icon name="arrow" :size="17" /></button></div>
-            <section class="card"><article v-for="item in expressions.filter(item => item.shared_topic_id)" :key="item.id" class="list-row"><div class="row-content"><h3>{{ item.title }}</h3><p class="muted">第 {{ item.version }} 版 · 可见范围：指定议题的参与者</p></div><button class="button danger" @click="prepareRevoke(item)">撤回分享</button></article><div v-if="!expressions.some(item => item.shared_topic_id)" class="empty-state compact"><p>当前没有共享中的原话。</p></div></section>
+            <div class="section-heading"><h2>我共享中的表达</h2><button class="button ghost" @click="loadPage('expressions')">管理我的私稿<Icon name="arrow" :size="17" /></button></div>
+            <section class="card"><article v-for="item in expressions.filter(item => item.shared_topic_id)" :key="item.id" class="list-row"><div class="row-content"><h3>{{ item.title }}</h3><p class="muted">第 {{ item.version }} 版 · 可见范围：指定议题的参与者</p></div><button class="button danger" @click="prepareRevoke(item)">撤回分享</button></article><div v-if="!expressions.some(item => item.shared_topic_id)" class="empty-state compact"><p>当前没有共享中的表达。</p></div></section>
             <div class="section-heading"><h2>账号会话</h2></div><section class="card"><p>{{ sessions.length }} 条账号会话记录（含历史）。公用终端闲置 5 分钟自动退出；退出同时清除当前页面内存。</p><article v-for="(session, index) in sessions" :key="session.id ?? index" class="list-row"><div class="row-content"><h3>{{ session.current ? '当前会话' : session.revoked ? '已撤销的历史会话' : '其他账号会话记录' }}</h3><p class="muted">建立 {{ dateText(session.created_at) }} · 到期 {{ dateText(session.expires_at) }}</p></div><span v-if="session.current" class="badge">当前</span></article></section>
             <div class="section-heading"><h2>我的操作留痕</h2><button class="button ghost" @click="loadPage('permissions')">刷新</button></div><section class="card audit-list"><article v-for="(audit, index) in audits" :key="audit.id ?? index" class="list-row"><Icon name="clock" /><div class="row-content"><h3>{{ auditLabel(audit.action) }}</h3><p class="muted">{{ audit.object_type ?? '操作记录' }}{{ audit.object_id ? ` · ${audit.object_id.slice(0, 8)}` : '' }}</p></div><time>{{ dateText(audit.created_at ?? audit.timestamp) }}</time></article><div v-if="!audits.length" class="empty-state compact"><p>暂无当前账号的操作记录。</p></div></section>
             <section class="card stage-card"><h3>更正、导出与退出社区</h3><p>R0 尚未提供自动导出、数据删除和求助工单。请向社区指定受理人提出申请，先核对范围，再由人工办理并留存记录。</p><button class="button secondary" @click="openHelp('个人资料更正、导出或退出社区')">查看人工办理路径</button></section>
@@ -418,13 +589,79 @@ onUnmounted(() => { if (idleTimer) clearInterval(idleTimer); if (noticeTimer) cl
     <nav class="mobile-nav" aria-label="手机快捷导航"><button :class="{ active: page === 'home' }" @click="loadPage('home')"><Icon name="home" /><span>首页</span></button><button :class="{ active: page === 'tasks' }" @click="loadPage('tasks')"><Icon name="task" /><span>待回应</span></button><button :class="{ active: page === 'permissions' || page === 'admin' }" @click="loadPage('permissions')"><Icon name="person" /><span>我的</span></button></nav>
   </div>
 
-  <Modal v-if="dialog" :title="dialog === 'help' ? '求助与人工路径' : dialog === 'document' ? '资料原文' : dialog === 'expression' ? selectedExpression ? '编辑我的原话' : '写下我的想法' : dialog === 'share' ? '预览本次原话分享' : dialog === 'revoke' ? '撤回原话分享' : dialog === 'topic' ? '发起合成测试议题' : dialog === 'participants' ? '添加议题参与者' : dialog === 'option' ? '补充备选方案' : dialog === 'stance' ? '核对并表达我的立场' : dialog === 'invitation' ? '邀请本人承担任务' : dialog === 'response' ? '核对任务条款' : dialog === 'admin-invite' ? '建立一次性加入邀请' : '冻结本地账号'" @close="closeDialog">
-    <div v-if="formError" class="notice error" role="alert"><p>{{ formError }}</p><button v-if="formError.includes('版本')" class="button secondary" @click="closeDialog(); selectedTopic ? loadTopic(selectedTopic.id) : loadPage()">关闭并重新载入</button></div>
+  <Modal v-if="dialog" :title="modalTitle" :wide="dialog === 'expression-review'" @close="closeDialog">
+    <div v-if="formError" class="notice error" role="alert"><p>{{ formError }}</p><button v-if="formError.includes('版本')" class="button secondary" @click="reloadAfterConflict()">关闭并重新载入</button></div>
     <template v-if="dialog === 'help'"><span class="badge">人工协助 · 不会自动发送</span><h3>{{ helpSubject }}</h3><p>请联系你所在社区已约定的值班人员、议题主持人或独立请求受理人。R0 尚未配置真实联系人，也不自动发送消息。</p><ol class="manual-steps"><li>先说明你希望得到什么帮助，可以不讲述敏感经历。</li><li>当面或通过已约定渠道核对接收人，并说明哪些内容仅供对方阅读。</li><li>涉及观点、任务或授权，请一起核对具体版本和本人意愿。</li><li>共同记忆须先让相关人审阅，记录受众和期限；不同意或没有回应时不发布。</li></ol><div class="notice info">如为程序异议或涉及主持人本人，请寻找另一位独立受理人。未上线的功能可先采用纸面记录与本人签认。</div><button class="button primary" @click="closeDialog()">已了解人工路径</button></template>
     <template v-else-if="dialog === 'document' && selectedDocument"><span class="badge">{{ selectedDocument.category }} · 合成资料</span><h3>{{ selectedDocument.title }}</h3><p class="preserve-text document-body">{{ selectedDocument.body }}</p><div class="divider"></div><dl class="key-values"><div><dt>来源</dt><dd>{{ selectedDocument.source }}</dd></div><div><dt>版本</dt><dd>第 {{ selectedDocument.version }} 版</dd></div><div><dt>更新</dt><dd>{{ dateText(selectedDocument.updated_at) }}</dd></div></dl><button class="button secondary" @click="openHelp('资料来源与内容纠错')">请求人工核对</button></template>
-    <form v-else-if="dialog === 'expression'" @submit.prevent="saveExpression"><div class="notice info">默认仅本人可见。{{ selectedExpression ? '修改会产生新版本，并移除当前议题中的旧共享文本。新版须重新确认和分享。' : '保存只建立私稿；不会自动分享。' }}</div><label class="form-field">想法标题<input v-model="expressionForm.title" required maxlength="160" placeholder="用一句话描述你想谈的事" /></label><label class="form-field">我的原话<textarea v-model="expressionForm.text" required maxlength="10000" rows="9" placeholder="可以说出担忧、拒绝、条件与不确定性，不必写得很完美。"></textarea></label><p class="muted">本轮没有 AI 转述，系统会完整保存你提交的原话。</p><div class="inline-actions"><button class="button primary" type="submit" :disabled="busy">{{ busy ? '保存中…' : '保存私人原话' }}</button><button class="button secondary" type="button" :disabled="busy" @click="closeDialog()">取消</button></div></form>
-    <form v-else-if="dialog === 'share' && selectedExpression" @submit.prevent="shareExpression"><div class="notice warning">本次将分享本人确认的原话第 {{ selectedExpression.version }} 版。R0 不生成转述，请确认这段原话适合所选受众。</div><h3>{{ selectedExpression.title }}</h3><div class="share-preview preserve-text">{{ selectedExpression.text }}</div><label class="form-field">分享到哪个议题<select v-model="shareTopicId" required><option value="" disabled>选择你有权参与的议题</option><option v-for="topic in topics" :key="topic.id" :value="topic.id">{{ topic.title }}</option></select></label><div v-if="shareTarget" class="notice info"><strong>本次受众：{{ shareTarget.title }} 的 {{ shareTarget.participants.length }} 位参与者</strong><p>议题后续新增的参与者也会看到当前共享内容。只分享上述原话版本与作者信息，私人草稿不会因此全部开放。</p></div><p v-if="!topics.length" class="notice warning">目前没有可分享的议题。请先请发起人邀请你，或建立议题。</p><label class="checkbox-field"><input v-model="shareConsent" type="checkbox" required />我已核对这段原话、具体版本与议题受众，同意本次分享。</label><div class="inline-actions"><button class="button primary" type="submit" :disabled="busy || !shareConsent || !shareTopicId">{{ busy ? '分享中…' : '分享这版原话到所选议题' }}</button><button class="button secondary" type="button" :disabled="busy" @click="closeDialog()">继续保留私稿</button></div></form>
-    <template v-else-if="dialog === 'revoke' && selectedExpression"><h3>{{ selectedExpression.title }}</h3><div class="notice warning">撤回后，当前议题视图会立即停止展示这份原话。已经被看到或另行记录的内容无法自动收回。</div><p>原话继续保留在你的私稿中。撤回分享不会自动改变你已表达的立场或任务回应。</p><div class="inline-actions"><button class="button danger" :disabled="busy" @click="revokeExpression()">{{ busy ? '撤回中…' : '撤回此原话的分享' }}</button><button class="button secondary" :disabled="busy" @click="closeDialog()">保留现有分享</button></div></template>
+    <form v-else-if="dialog === 'expression'" @submit.prevent="saveExpression"><div class="notice info">默认仅本人可见。{{ selectedExpression ? '修改会产生新版本，并移除当前议题中的旧共享文本。新版须重新确认和分享。' : '保存只建立私稿；不会自动分享。' }}</div><label class="form-field">想法标题<input v-model="expressionForm.title" required maxlength="160" placeholder="用一句话描述你想谈的事" /></label><label class="form-field">我的原话<textarea v-model="expressionForm.text" required maxlength="10000" rows="9" placeholder="可以说出担忧、拒绝、条件与不确定性，不必写得很完美。"></textarea></label><p class="muted">系统完整保存你提交的原话。候选转述在另一界面独立核对，原话不会被候选覆盖。</p><div class="inline-actions"><button class="button primary" type="submit" :disabled="busy">{{ busy ? '保存中…' : '保存私人原话' }}</button><button class="button secondary" type="button" :disabled="busy" @click="closeDialog()">取消</button></div></form>
+    <template v-else-if="dialog === 'expression-review' && expressionDetail">
+      <div class="notice info">这里的原话、两个候选及语境都只对本人可见。确认原话准确、选择候选、允许分享分别记录；候选或选择变化会停止旧分享。</div>
+      <div class="expression-layout">
+        <section class="original-card">
+          <div class="candidate-header"><h3>我的完整原话</h3><span class="badge">源 v{{ expressionDetail.utterance.version }}</span></div>
+          <h4>{{ expressionDetail.utterance.title }}</h4><p class="candidate-text">{{ expressionDetail.utterance.text }}</p>
+          <p class="review-state" :class="isConfirmed(expressionDetail.utterance) ? 'confirmed' : 'pending'">{{ isConfirmed(expressionDetail.utterance) ? '这版原话已由本人确认准确' : '这版原话尚待本人核对' }}</p>
+          <div class="candidate-actions"><button v-if="!isConfirmed(expressionDetail.utterance)" class="button secondary" :disabled="busy" @click="confirmExpression(expressionDetail.utterance)">本人确认这版原话准确</button><button class="button ghost" :disabled="busy" @click="editExpression(expressionDetail.utterance)">编辑原话</button></div>
+          <p class="muted">编辑原话会使旧候选、选择与分享失效。原话保留完整，不会被转述覆盖。</p>
+        </section>
+        <div class="stack">
+          <article v-for="candidate in expressionDetail.candidates" :key="candidate.id" class="candidate-card" :class="{ selected: selectedConfirmedCandidate?.id === candidate.id }">
+            <div class="candidate-header"><h3>{{ candidateLabels[candidate.kind] }}</h3><span class="candidate-source" :class="candidate.origin === 'local_model' ? 'ollama' : 'manual'">{{ candidate.origin === 'local_model' ? '本地模型候选' : '本人手写或修改' }}</span></div>
+            <p class="candidate-text">{{ candidate.text }}</p>
+            <details><summary>本人提供的私人语境与用途</summary><dl class="key-values"><div><dt>背景语境</dt><dd>{{ candidate.context || '未填写' }}</dd></div><div><dt>目标语境</dt><dd>{{ candidate.target_context || '未填写' }}</dd></div><div><dt>用途</dt><dd>{{ candidate.purpose || '未填写' }}</dd></div></dl></details>
+            <p class="review-state" :class="selectedConfirmedCandidate?.id === candidate.id ? 'confirmed' : 'pending'">源 v{{ candidate.utterance_version }} / 候选 v{{ candidate.version }} · {{ selectedConfirmedCandidate?.id === candidate.id ? '本人已选择并确认这版准确' : '待本人选择和核对' }}</p>
+            <div class="candidate-actions"><button class="button primary" :disabled="busy" @click="selectRephrase('candidate', candidate)">这版准确，我选择它</button><button class="button secondary" :disabled="busy" @click="editCandidate(candidate)">我来修改</button></div>
+          </article>
+          <div v-if="!expressionDetail.candidates.length" class="candidate-card empty-state compact"><p>还没有候选转述。可以手写日常表达或本次讨论表达，不必启用模型。</p></div>
+          <button v-if="expressionDetail.candidates.length < 2" class="button secondary" :disabled="busy" @click="editCandidate()"><Icon name="plus" />手写私人候选（最多两种）</button>
+        </div>
+      </div>
+      <div class="notice info"><strong>当前选择：{{ expressionDetail.choice ? choiceLabels[expressionDetail.choice.choice] : '尚未选择' }}</strong><p>选择具体候选不会自动分享。即使拒绝候选，你仍可保留原话、继续参与；分享前还需核对原话版本。</p></div>
+      <div class="inline-actions"><button class="button secondary" :disabled="busy" @click="selectRephrase('original_only')">只用我的原话</button><button class="button secondary" :disabled="busy" @click="selectRephrase('no_rephrase')">这些转述我不认可</button><button v-if="isConfirmed(expressionDetail.utterance)" class="button primary" :disabled="busy" @click="prepareShare(expressionDetail.utterance)">另一步预览分享</button></div>
+      <section class="local-model-panel">
+        <div class="section-heading"><div><h3>可选本地模型 · 私人建议</h3><p class="muted">只发送这份原话及你在下方主动填写的三项语境。结果不自动保存、确认或分享。</p></div><button class="button ghost" :disabled="busy" @click="refreshAiStatus()">检查模型状态</button></div>
+        <div class="ai-status"><strong>{{ aiStatus?.available ? '本地模型可用' : aiStatus?.enabled ? '本地模型未就绪' : aiStatus ? '本地模型关闭' : '模型状态待检查' }}</strong><p>{{ aiStatus?.reason ?? '请先检查模型状态；手写候选始终可用。' }}</p></div>
+        <div class="form-grid"><label class="form-field">我主动提供的背景语境<textarea v-model="aiContext.context" rows="2" maxlength="3000" :disabled="aiLoading" placeholder="可留空，不会读取历史私聊"></textarea></label><label class="form-field">希望怎样表达<textarea v-model="aiContext.target_context" rows="2" maxlength="1000" :disabled="aiLoading" placeholder="例如用日常语言解释，或用于这次议题"></textarea></label></div>
+        <label class="form-field">本次用途<input v-model="aiContext.purpose" maxlength="1000" :disabled="aiLoading" placeholder="可留空；请避免加入不必要的个人信息" /></label>
+        <div class="inline-actions"><button class="button secondary" :disabled="busy || !aiStatus?.available" @click="generateSuggestions()">{{ aiLoading ? '最多等待约 65 秒接收私人建议…' : '请求最多两个私人建议' }}</button><button v-if="aiLoading" class="button ghost" @click="cancelSuggestions()">放弃等待，返回人工</button><button v-if="aiLoading" class="button danger" @click="logout()">立即退出并清除页面内容</button></div>
+        <div v-if="aiError" class="notice error" role="alert">{{ aiError }}</div>
+        <template v-if="modelSuggestions"><p class="eyebrow">{{ modelSuggestions.model }} · 未保存的私人建议</p><article v-for="suggestion in modelSuggestions.candidates" :key="suggestion.kind" class="candidate-card"><div class="candidate-header"><h4>{{ candidateLabels[suggestion.kind] }}</h4><span class="badge warning">待本人核对 · 尚未保存</span></div><p class="candidate-text">{{ suggestion.text }}</p><button class="button secondary" @click="useModelSuggestion(suggestion)">打开编辑，选择是否保存</button></article><div v-if="modelSuggestions.clarifications.length" class="notice info"><strong>模型提出的澄清问题</strong><ul><li v-for="question in modelSuggestions.clarifications" :key="question">{{ question }}</li></ul><p>这些问题不代表已核实的事实；由你选择是否补充。</p></div></template>
+      </section>
+    </template>
+    <form v-else-if="dialog === 'candidate' && expressionDetail" @submit.prevent="saveCandidate()">
+      <div class="notice info">只保存私人候选，不确认、不分享。最多“日常表达”和“本次讨论表达”各一种；保留原话中的条件、拒绝和不确定性。</div>
+      <div v-if="selectedCandidate" class="notice warning">修改候选 v{{ selectedCandidate.version }} 会产生新版，旧确认失效。已被选择的候选改写后，旧选择和分享一并停止。</div>
+      <label class="form-field">候选类型<select v-model="candidateForm.kind" :disabled="!!selectedCandidate" required><option value="everyday" :disabled="!selectedCandidate && expressionDetail.candidates.some(candidate => candidate.kind === 'everyday')">日常表达</option><option value="discussion" :disabled="!selectedCandidate && expressionDetail.candidates.some(candidate => candidate.kind === 'discussion')">本次讨论表达</option></select></label>
+      <label class="form-field">候选正文<textarea v-model="candidateForm.text" required maxlength="10000" rows="7" placeholder="你可以亲自改写，也可以保留重要的冲突与语气。"></textarea></label>
+      <label class="form-field">本人提供的背景语境（仅本人可见）<textarea v-model="candidateForm.context" rows="2" maxlength="3000"></textarea></label><label class="form-field">目标表达语境（仅本人可见）<textarea v-model="candidateForm.target_context" rows="2" maxlength="1000"></textarea></label><label class="form-field">用途（仅本人可见）<input v-model="candidateForm.purpose" maxlength="1000" /></label>
+      <p class="candidate-source" :class="sourceProofMatches && !selectedCandidate ? 'ollama' : 'manual'">{{ sourceProofMatches && !selectedCandidate ? '未改动的本地模型建议，保存时携带短期来源证明' : '以本人手写或修改候选保存；不冒称模型来源' }}</p>
+      <p v-if="suggestionSnapshot && !sourceProofMatches" class="muted">正文、类型或语境已由你修改，因此不沿用模型来源证明。</p>
+      <div class="inline-actions"><button class="button primary" type="submit" :disabled="busy">{{ busy ? '保存中…' : '保存候选，稍后本人核对' }}</button><button v-if="formError && sourceProofMatches" class="button secondary" type="button" :disabled="busy" @click="saveCandidate(true)">移除来源证明，作为本人手写保存</button><button class="button ghost" type="button" :disabled="busy" @click="closeDialog()">不保存，返回核对</button></div>
+    </form>
+    <form v-else-if="dialog === 'understanding' && selectedViewpoint" @submit.prevent="sendUnderstanding">
+      <div class="notice info">本次复述只发给表达者本人，主持人和管理员不能旁观。理解核对不改变立场或任务状态。</div>
+      <p class="eyebrow">{{ selectedViewpoint.author_name }} 的 {{ selectedViewpoint.representation === 'candidate' ? '确认转述' : '原话' }} · 源 v{{ selectedViewpoint.utterance_version }}{{ selectedViewpoint.candidate_version ? ` / 候选 v${selectedViewpoint.candidate_version}` : '' }}</p><div class="share-preview preserve-text">{{ selectedViewpoint.text }}</div>
+      <label class="form-field">我理解的是……<textarea v-model="understandingText" required maxlength="5000" rows="7" placeholder="用自己的话说出理解，保留你不确定、希望作者澄清的部分。"></textarea></label>
+      <p class="muted">复述只依据上面已获准展示的正文，不会读取对方私人原话或背景。原观点变化后需重新发起。</p><button class="button primary" type="submit" :disabled="busy">{{ busy ? '提交中…' : '把这次复述发给作者核对' }}</button>
+    </form>
+    <form v-else-if="dialog === 'understanding-response' && selectedUnderstanding" @submit.prevent="respondUnderstanding">
+      <span class="understanding-status" :class="selectedUnderstanding.status">{{ understandingLabels[selectedUnderstanding.status] }} · 仅双方可见</span>
+      <p class="eyebrow">源观点：{{ selectedUnderstanding.author_name }} · 源 v{{ selectedUnderstanding.utterance_version }}{{ selectedUnderstanding.candidate_version ? ` / 候选 v${selectedUnderstanding.candidate_version}` : '' }}</p><div v-if="understandingSource" class="share-preview preserve-text">{{ understandingSource.text }}</div>
+      <h3>{{ selectedUnderstanding.requester_name }} 的亲自复述</h3><p class="candidate-text">{{ selectedUnderstanding.text }}</p><p v-if="selectedUnderstanding.correction" class="notice info preserve-text">表达者回应：{{ selectedUnderstanding.correction }}</p>
+      <template v-if="selectedUnderstanding.author_id === user?.id && selectedUnderstanding.status === 'pending'"><fieldset class="expression-mode-grid"><legend>由表达者本人核对这次复述</legend><label class="sharing-mode-choice" :class="{ selected: understandingForm.status === 'accurate' }"><input v-model="understandingForm.status" type="radio" value="accurate" />这次理解准确</label><label class="sharing-mode-choice" :class="{ selected: understandingForm.status === 'needs_correction' }"><input v-model="understandingForm.status" type="radio" value="needs_correction" />部分准确，需要修正</label><label class="sharing-mode-choice" :class="{ selected: understandingForm.status === 'prefer_in_person' }"><input v-model="understandingForm.status" type="radio" value="prefer_in_person" />我希望当面交流</label></fieldset><label class="form-field">{{ understandingForm.status === 'needs_correction' ? '修正说明（必填）' : '补充说明（可选）' }}<textarea v-model="understandingForm.correction" :required="understandingForm.status === 'needs_correction'" maxlength="5000" rows="4" placeholder="保留准确部分，具体说明哪里需要补充。"></textarea></label><div class="notice info">确认听懂不等于同意，不会增加支持票、改变任务回应或开放分享权限。</div><button class="button primary" type="submit" :disabled="busy">{{ busy ? '保存中…' : '保存表达者本人的核对' }}</button></template>
+      <template v-else><div class="notice info">此记录已回应或当前账号是听者，不能代作者确认。若还需继续澄清，可进入相同的当前有效观点重新写一次复述。</div><button class="button secondary" type="button" @click="returnToUnderstandingTopic()">返回当前议题继续理解</button></template>
+    </form>
+    <form v-else-if="dialog === 'share' && selectedExpression" @submit.prevent="shareExpression">
+      <div class="notice warning">本次仅发布下方预览中的唯一正文。分享转述时，私人原话、语境和其他候选不会随附。</div>
+      <fieldset class="expression-mode-grid"><legend>选择实际发布的正文</legend><label class="sharing-mode-choice" :class="{ selected: shareRepresentation === 'original' }"><input v-model="shareRepresentation" type="radio" value="original" @change="shareConsent = false" />本人原话 · 第 {{ selectedExpression.version }} 版</label><label v-if="selectedConfirmedCandidate" class="sharing-mode-choice" :class="{ selected: shareRepresentation === 'candidate' }"><input v-model="shareRepresentation" type="radio" value="candidate" @change="shareConsent = false" />{{ candidateLabels[selectedConfirmedCandidate.kind] }} · 已确认候选 v{{ selectedConfirmedCandidate.version }}</label></fieldset>
+      <p v-if="!selectedConfirmedCandidate" class="muted">尚无有效的本人确认转述。如需要，请返回“原话与转述核对”选择具体候选版本。</p>
+      <h3>{{ selectedExpression.title }}</h3><p class="eyebrow">实际发布预览 · {{ shareRepresentation === 'original' ? '本人原话' : '本人确认转述' }}</p><div class="share-preview preserve-text">{{ shareText }}</div>
+      <label class="form-field">分享到哪个议题<select v-model="shareTopicId" required @change="shareConsent = false"><option value="" disabled>选择你有权参与的议题</option><option v-for="topic in topics" :key="topic.id" :value="topic.id">{{ topic.title }}</option></select></label>
+      <div v-if="shareTarget" class="notice info"><strong>本次受众：{{ shareTarget.title }} 的 {{ shareTarget.participants.length }} 位参与者</strong><p>议题后续新增参与者也会看到当前共享正文。其他私人内容不会因此全部开放。</p></div>
+      <p v-if="!topics.length" class="notice warning">目前没有可分享的议题，请联系主持人邀请参与。</p><label class="checkbox-field"><input v-model="shareConsent" type="checkbox" required />我已核对唯一正文、具体版本与议题受众，同意本次分享。</label>
+      <div class="inline-actions"><button class="button primary" type="submit" :disabled="busy || !shareConsent || !shareTopicId || !isConfirmed(selectedExpression)">{{ busy ? '分享中…' : '分享预览中的唯一正文' }}</button><button class="button secondary" type="button" :disabled="busy" @click="closeDialog()">继续保留私稿</button></div>
+    </form>
+    <template v-else-if="dialog === 'revoke' && selectedExpression"><h3>{{ selectedExpression.title }}</h3><div class="notice warning">撤回后，当前议题视图会立即停止展示这份表达正文。已经被看到或另行记录的内容无法自动收回。</div><p>原话继续保留在你的私稿中。撤回分享不会自动改变你已表达的立场或任务回应。</p><div class="inline-actions"><button class="button danger" :disabled="busy" @click="revokeExpression()">{{ busy ? '撤回中…' : '撤回这份表达的分享' }}</button><button class="button secondary" :disabled="busy" @click="closeDialog()">保留现有分享</button></div></template>
     <form v-else-if="dialog === 'topic'" @submit.prevent="saveTopic"><div class="notice warning">本轮仅建立合成测试议题，由你负责邀请参与者。此操作不启动正式决定程序。</div><label class="form-field">议题标题<input v-model="topicForm.title" required maxlength="160" placeholder="我们需要一起讨论什么？" /></label><label class="form-field">背景与问题<textarea v-model="topicForm.description" required maxlength="10000" rows="5" placeholder="说明为什么提出，以及需要核实的事实。"></textarea></label><label class="form-field">讨论范围与边界<textarea v-model="topicForm.scope" required maxlength="3000" rows="3" placeholder="这次讨论影响什么、暂不涉及什么、谁需要参与？"></textarea></label><button class="button primary" type="submit" :disabled="busy">{{ busy ? '建立中…' : '建立测试议题' }}</button></form>
     <form v-else-if="dialog === 'participants' && selectedTopic" @submit.prevent="addParticipant"><div class="notice warning">新增参与者会获得此议题及当前共享观点的读取权。请先按约定程序征得对方参与意愿。</div><label class="form-field">选择成员<select v-model="participantId" required><option value="" disabled>请选择成员</option><option v-for="member in participantCandidates" :key="member.id" :value="member.id">{{ member.display_name }}</option></select></label><p v-if="!participantCandidates.length" class="muted">合成成员目录中的所有成员已经在本议题中。</p><button class="button primary" type="submit" :disabled="busy || !participantId">确认加入此议题可见范围</button></form>
     <form v-else-if="dialog === 'option'" @submit.prevent="saveOption"><label class="form-field">方案名称<input v-model="optionForm.title" required maxlength="160" /></label><label class="form-field">方案内容<textarea v-model="optionForm.description" required rows="4" maxlength="10000"></textarea></label><label class="form-field">费用与资源<textarea v-model="optionForm.cost" rows="2" maxlength="3000" placeholder="已确认和待确认的资源分别写清楚"></textarea></label><label class="form-field">劳动与承担<textarea v-model="optionForm.labor" rows="2" maxlength="3000" placeholder="需要谁投入什么；尚未有人接受的任务请标明"></textarea></label><label class="form-field">风险与未核实项<textarea v-model="optionForm.risks" rows="2" maxlength="3000"></textarea></label><button class="button primary" type="submit" :disabled="busy">{{ busy ? '保存中…' : '加入备选方案' }}</button></form>

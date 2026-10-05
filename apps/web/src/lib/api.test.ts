@@ -16,6 +16,21 @@ describe('same-origin authenticated API', () => {
       credentials: 'same-origin', cache: 'no-store', body: '{"object_version":2}', headers: expect.objectContaining({ 'X-CSRF-Token': 'only-in-memory-csrf', 'Idempotency-Key': 'repeat-this-key' }),
     }))
   })
+  it('proves authenticated GET requests with the same in-memory session token', async () => {
+    setSession(session)
+    vi.mocked(fetch).mockResolvedValue(jsonResponse([]))
+    await request('/utterances')
+    expect(fetch).toHaveBeenCalledWith('/api/v1/utterances', expect.objectContaining({
+      method: 'GET', credentials: 'same-origin', headers: expect.objectContaining({ 'X-CSRF-Token': session.csrf_token }),
+    }))
+  })
+  it('does not recover a private read token from a cookie after local logout', async () => {
+    setSession(session)
+    clearSession()
+    vi.mocked(fetch).mockResolvedValue(jsonResponse({ detail: '缺少页面会话证明' }, 401))
+    await expect(request('/auth/me')).rejects.toMatchObject({ status: 401 })
+    expect(vi.mocked(fetch).mock.calls[0]?.[1]?.headers).not.toHaveProperty('X-CSRF-Token')
+  })
   it('returns the server conflict rather than treating an obsolete version as success', async () => {
     vi.mocked(fetch).mockResolvedValue(jsonResponse({ detail: '内容版本已变化' }, 409))
     await expect(request('/utterances/private-id/confirmations', 'POST', { object_version: 1 }, 'key')).rejects.toMatchObject({ status: 409, message: '内容版本已变化' })
@@ -39,6 +54,16 @@ describe('same-origin authenticated API', () => {
     resolveJson({ detail: '旧会话已失效' })
     await expect(previousRequest).rejects.toMatchObject({ status: 401 })
     expect(unauthorized).not.toHaveBeenCalled()
+  })
+  it('supports cancelling a model request without retaining its response', async () => {
+    const cancellation = new AbortController()
+    vi.mocked(fetch).mockImplementationOnce((_path, options) => new Promise((_resolve, reject) => {
+      options?.signal?.addEventListener('abort', () => reject(new DOMException('Cancelled', 'AbortError')))
+    }))
+    const inference = request('/utterances/u/suggestions', 'POST', { object_version: 1, context: '', target_context: '', purpose: '' }, undefined, 65000, cancellation.signal)
+    cancellation.abort()
+    await expect(inference).rejects.toMatchObject({ status: 0 })
+    expect(vi.mocked(fetch).mock.calls[0]?.[1]?.signal?.aborted).toBe(true)
   })
   it('ends the session immediately while the server logout is still pending', async () => {
     setSession(session)

@@ -149,3 +149,62 @@ class Idempotency(Base):
     payload_hash: Mapped[str] = mapped_column(String(64))
     result: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[str] = mapped_column(String(40))
+
+
+class ExpressionCandidate(Base):
+    __tablename__ = "expression_candidates"
+    __table_args__ = (UniqueConstraint("utterance_id", "utterance_version", "kind"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    utterance_id: Mapped[str] = mapped_column(ForeignKey("utterances.id"), index=True)
+    utterance_version: Mapped[int] = mapped_column(Integer)
+    kind: Mapped[str] = mapped_column(String(20))
+    text: Mapped[str] = mapped_column(Text)
+    context: Mapped[str] = mapped_column(Text)
+    target_context: Mapped[str] = mapped_column(Text)
+    purpose: Mapped[str] = mapped_column(Text)
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    origin: Mapped[str] = mapped_column(String(20), default="manual")
+    confirmed_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    confirmed_at: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    created_at: Mapped[str] = mapped_column(String(40))
+    updated_at: Mapped[str] = mapped_column(String(40))
+
+
+class ExpressionChoice(Base):
+    __tablename__ = "expression_choices"
+    utterance_id: Mapped[str] = mapped_column(ForeignKey("utterances.id"), primary_key=True)
+    utterance_version: Mapped[int] = mapped_column(Integer)
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    choice: Mapped[str] = mapped_column(String(20))
+    candidate_id: Mapped[str | None] = mapped_column(ForeignKey("expression_candidates.id"), nullable=True)
+    candidate_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    confirmed_at: Mapped[str] = mapped_column(String(40))
+    updated_at: Mapped[str] = mapped_column(String(40))
+
+
+class ExpressionShare(Base):
+    __tablename__ = "expression_shares"
+    utterance_id: Mapped[str] = mapped_column(ForeignKey("utterances.id"), primary_key=True)
+    utterance_version: Mapped[int] = mapped_column(Integer)
+    representation: Mapped[str] = mapped_column(String(20))
+    candidate_id: Mapped[str | None] = mapped_column(ForeignKey("expression_candidates.id"), nullable=True)
+    candidate_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+
+class Understanding(Base):
+    __tablename__ = "understanding_requests"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    topic_id: Mapped[str] = mapped_column(ForeignKey("topics.id"), index=True)
+    utterance_id: Mapped[str] = mapped_column(ForeignKey("utterances.id"), index=True)
+    utterance_version: Mapped[int] = mapped_column(Integer)
+    representation: Mapped[str] = mapped_column(String(20))
+    candidate_id: Mapped[str | None] = mapped_column(ForeignKey("expression_candidates.id"), nullable=True)
+    candidate_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    requester_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    author_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    text: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(20), default="pending")
+    correction: Mapped[str] = mapped_column(Text, default="")
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    created_at: Mapped[str] = mapped_column(String(40))
+    updated_at: Mapped[str] = mapped_column(String(40))

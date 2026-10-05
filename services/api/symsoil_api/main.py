@@ -7,25 +7,29 @@ from pathlib import Path
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse
-from sqlalchemy import exists, func, or_, select, update
+from sqlalchemy import delete, exists, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from . import schemas as s
 from .db import Base, database_url, make_engine, session_factory
-from .models import Audit, Document, Idempotency, Invitation, Option, Participant, RegistrationInvite, Session, Stance, Topic, User, Utterance
+from .models import Audit, Document, ExpressionCandidate, ExpressionChoice, ExpressionShare, Idempotency, Invitation, Option, Participant, RegistrationInvite, Session, Stance, Topic, Understanding, User, Utterance
+from .ollama import OllamaAdapter
 from .security import COOKIE_NAME, authenticate, digest, password_hasher, require_origin, secure_cookie, stamp, utcnow, verify_password
-from .serialize import document_data, invitation_data, topic_data, topic_detail, user_data, utterance_data, viewpoint_data
+from .serialize import current_viewpoint, document_data, expression_detail, invitation_data, topic_data, topic_detail, understanding_data, understanding_source_current, user_data, utterance_data, viewpoint_data
+from .suggestion_tokens import SuggestionSigner
 
 
 def create_app(url: str | None = None, web_dist: str | None = None):
-    app = FastAPI(title="SymSoil R0 API", version="0.1.0")
+    app = FastAPI(title="SymSoil R0.2 API", version="0.2.0")
     engine = make_engine(url or database_url())
     Base.metadata.create_all(engine)
     factory = session_factory(engine)
     app.state.engine = engine
     app.state.session_factory = factory
     app.state.cookie_secure = secure_cookie()
+    app.state.ollama = OllamaAdapter()
+    app.state.suggestion_signer = SuggestionSigner()
 
     @app.exception_handler(RequestValidationError)
     async def validation_error(_request, exc):
@@ -96,6 +100,32 @@ def create_app(url: str | None = None, web_dist: str | None = None):
         if item.version != version:
             raise HTTPException(409, "版本已变化，请刷新后重新核对")
 
+    def lock_utterance(db, item, version):
+        # A harmless version-conditioned write locks the source row on PostgreSQL
+        # as well as SQLite. Metadata changes never advance the original revision.
+        cas(db, Utterance, item, version, {"updated_at": stamp()})
+
+    def clear_share(db, item):
+        db.execute(update(Utterance).where(Utterance.id == item.id).values(shared_topic_id=None, shared_version=None, shared_text=None, updated_at=stamp()))
+        db.execute(delete(ExpressionShare).where(ExpressionShare.utterance_id == item.id))
+        db.refresh(item)
+
+    def current_candidate(db, item, candidate_id):
+        candidate = db.get(ExpressionCandidate, candidate_id)
+        if not candidate or candidate.utterance_id != item.id or candidate.utterance_version != item.version:
+            raise HTTPException(404, "记录不可访问")
+        return candidate
+
+    def current_choice(db, item):
+        choice = db.get(ExpressionChoice, item.id)
+        return choice if choice and choice.utterance_version == item.version else None
+
+    def accessible_understanding(db, actor, item_id, author=False):
+        item = db.get(Understanding, item_id)
+        if not item or actor.id not in (item.author_id, item.requester_id) or (author and actor.id != item.author_id) or not understanding_source_current(db, item):
+            raise HTTPException(404, "记录不可访问")
+        return item
+
     def cas(db, model, item, version, values, *extra):
         changed = db.execute(update(model).where(model.id == item.id, model.version == version, *extra).values(**values)).rowcount
         if changed != 1:
@@ -107,7 +137,12 @@ def create_app(url: str | None = None, web_dist: str | None = None):
         if not key or len(key) > 100 or not all(32 <= ord(char) < 127 for char in key):
             raise HTTPException(422, "该操作需要有效的Idempotency-Key")
         operation = request.method + " " + request.url.path
-        payload_hash = digest(json.dumps(body.model_dump(), sort_keys=True, ensure_ascii=False, separators=(",", ":")))
+        normalized = body.model_dump()
+        if isinstance(body, s.Share) and body.representation == "original":
+            # Preserve normalized hashes for already-completed R0 original share
+            # requests when reopening their existing database under R0.2.
+            normalized = {"object_version": body.object_version, "topic_id": body.topic_id}
+        payload_hash = digest(json.dumps(normalized, sort_keys=True, ensure_ascii=False, separators=(",", ":")))
         criteria = (Idempotency.actor_id == actor.id, Idempotency.operation == operation, Idempotency.key == key)
         previous = db.scalar(select(Idempotency).where(*criteria))
         if previous:
@@ -135,9 +170,9 @@ def create_app(url: str | None = None, web_dist: str | None = None):
     def safe_topic_replay(db, replay, topic_id):
         # A cached mutation result must not resurrect an expression whose author
         # has since withdrawn it or changed the original version.
-        permitted = {(item.id, item.shared_version) for item in db.scalars(select(Utterance).where(Utterance.shared_topic_id == topic_id, Utterance.shared_version == Utterance.version, Utterance.confirmed_version == Utterance.version))}
+        permitted = {(item.id, view["utterance_version"], view["representation"], view["candidate_id"], view["candidate_version"]): view["text"] for item in db.scalars(select(Utterance).where(Utterance.shared_topic_id == topic_id)) if (view := current_viewpoint(db, item)) is not None}
         replay = dict(replay)
-        replay["viewpoints"] = [item for item in replay.get("viewpoints", []) if (item["id"], item["utterance_version"]) in permitted]
+        replay["viewpoints"] = [item for item in replay.get("viewpoints", []) if permitted.get((item["id"], item["utterance_version"], item.get("representation", "original"), item.get("candidate_id"), item.get("candidate_version"))) == item["text"]]
         return replay
 
     prefix = "/api/v1"
@@ -273,6 +308,8 @@ def create_app(url: str | None = None, web_dist: str | None = None):
         db, actor = ctx
         item = owned_utterance(db, actor, item_id)
         cas(db, Utterance, item, body.object_version, {"title": body.title, "text": body.text, "version": body.object_version + 1, "confirmed_version": None, "confirmed_at": None, "shared_topic_id": None, "shared_version": None, "shared_text": None, "updated_at": stamp()})
+        db.execute(delete(ExpressionChoice).where(ExpressionChoice.utterance_id == item.id))
+        db.execute(delete(ExpressionShare).where(ExpressionShare.utterance_id == item.id))
         audit(db, actor, "utterance.edit", "utterance", item.id, item.version)
         return finish(db, utterance_data(item))
 
@@ -296,12 +333,29 @@ def create_app(url: str | None = None, web_dist: str | None = None):
         record, replay = begin_idempotency(db, actor, request, body)
         if replay is not None:
             return finish(db, replay)
-        check_version(item, body.object_version)
+        lock_utterance(db, item, body.object_version)
         if item.confirmed_version != item.version:
-            raise HTTPException(422, "请先核对本版本，再主动分享原话")
+            raise HTTPException(422, "请先核对原话当前版本，再主动分享")
         if item.shared_topic_id and item.shared_topic_id != body.topic_id:
             raise HTTPException(422, "请先撤回现有分享，再选择另一议题")
-        cas(db, Utterance, item, body.object_version, {"shared_topic_id": body.topic_id, "shared_version": item.version, "shared_text": item.text, "updated_at": stamp()}, Utterance.confirmed_version == body.object_version)
+        shared_text = item.text
+        if body.representation == "candidate":
+            candidate = current_candidate(db, item, body.candidate_id)
+            check_version(candidate, body.candidate_version)
+            choice = current_choice(db, item)
+            if choice and choice.version != body.choice_version:
+                raise HTTPException(409, "选择版本已变化，请重新核对")
+            if not choice or choice.choice != "candidate" or choice.candidate_id != candidate.id or choice.candidate_version != candidate.version or candidate.confirmed_version != candidate.version:
+                raise HTTPException(422, "请先由本人选择并核对该版本转述")
+            shared_text = candidate.text
+        cas(db, Utterance, item, body.object_version, {"shared_topic_id": body.topic_id, "shared_version": item.version, "shared_text": shared_text, "updated_at": stamp()}, Utterance.confirmed_version == body.object_version)
+        metadata = db.get(ExpressionShare, item.id)
+        if not metadata:
+            metadata = ExpressionShare(utterance_id=item.id)
+            db.add(metadata)
+        metadata.utterance_version, metadata.representation = item.version, body.representation
+        metadata.candidate_id, metadata.candidate_version = body.candidate_id, body.candidate_version
+        db.flush()
         audit(db, actor, "utterance.share", "utterance", item.id, item.version)
         return complete_idempotency(db, record, viewpoint_data(db, item))
 
@@ -310,8 +364,152 @@ def create_app(url: str | None = None, web_dist: str | None = None):
         db, actor = ctx
         item = owned_utterance(db, actor, item_id)
         cas(db, Utterance, item, body.object_version, {"shared_topic_id": None, "shared_version": None, "shared_text": None, "updated_at": stamp()})
+        db.execute(delete(ExpressionShare).where(ExpressionShare.utterance_id == item.id))
         audit(db, actor, "utterance.revoke", "utterance", item.id, item.version)
         return finish(db, utterance_data(item))
+
+    @app.get(prefix + "/utterances/{item_id}/expression")
+    def get_expression(item_id: str, ctx=Depends(context)):
+        db, actor = ctx
+        item = owned_utterance(db, actor, item_id)
+        return finish(db, expression_detail(db, item))
+
+    @app.post(prefix + "/utterances/{item_id}/candidates")
+    def create_candidate(item_id: str, body: s.CandidateCreate, ctx=Depends(context)):
+        db, actor = ctx
+        item = owned_utterance(db, actor, item_id)
+        lock_utterance(db, item, body.object_version)
+        if db.scalar(select(ExpressionCandidate.id).where(ExpressionCandidate.utterance_id == item.id, ExpressionCandidate.utterance_version == item.version, ExpressionCandidate.kind == body.kind)):
+            raise HTTPException(409, "此原话版本已有该类候选，请修改现有候选")
+        origin = "manual"
+        if body.suggestion_token:
+            app.state.suggestion_signer.verify(body.suggestion_token, actor.id, item.id, item.version, body.kind, body.text, body.context, body.target_context, body.purpose)
+            origin = "local_model"
+        candidate = ExpressionCandidate(utterance_id=item.id, utterance_version=item.version, origin=origin, created_at=stamp(), updated_at=stamp(), **body.model_dump(exclude={"object_version", "suggestion_token"}))
+        db.add(candidate)
+        db.flush()
+        audit(db, actor, "expression.candidate.create", "candidate", candidate.id, candidate.version)
+        return finish(db, expression_detail(db, item))
+
+    @app.patch(prefix + "/utterances/{item_id}/candidates/{candidate_id}")
+    def edit_candidate(item_id: str, candidate_id: str, body: s.CandidatePatch, ctx=Depends(context)):
+        db, actor = ctx
+        item = owned_utterance(db, actor, item_id)
+        lock_utterance(db, item, body.object_version)
+        candidate = current_candidate(db, item, candidate_id)
+        was_confirmed = candidate.confirmed_version is not None
+        cas(db, ExpressionCandidate, candidate, body.candidate_version, {**body.model_dump(exclude={"object_version", "candidate_version"}), "version": body.candidate_version + 1, "origin": "manual", "confirmed_version": None, "confirmed_at": None, "updated_at": stamp()})
+        if was_confirmed:
+            db.execute(delete(ExpressionChoice).where(ExpressionChoice.utterance_id == item.id))
+            clear_share(db, item)
+        audit(db, actor, "expression.candidate.edit", "candidate", candidate.id, candidate.version)
+        return finish(db, expression_detail(db, item))
+
+    @app.post(prefix + "/utterances/{item_id}/choice")
+    def choose_expression(item_id: str, body: s.ChoiceCreate, request: Request, ctx=Depends(context)):
+        db, actor = ctx
+        item = owned_utterance(db, actor, item_id)
+        record, replay = begin_idempotency(db, actor, request, body)
+        if replay is not None:
+            return finish(db, replay)
+        lock_utterance(db, item, body.object_version)
+        choice = current_choice(db, item)
+        if (choice.version if choice else 0) != body.choice_version:
+            raise HTTPException(409, "选择版本已变化，请刷新后重选")
+        if body.choice == "candidate":
+            candidate = current_candidate(db, item, body.candidate_id)
+            check_version(candidate, body.candidate_version)
+            cas(db, ExpressionCandidate, candidate, body.candidate_version, {"confirmed_version": candidate.version, "confirmed_at": stamp(), "updated_at": stamp()})
+        now = stamp()
+        if choice:
+            changed = db.execute(update(ExpressionChoice).where(ExpressionChoice.utterance_id == item.id, ExpressionChoice.version == body.choice_version, ExpressionChoice.utterance_version == item.version).values(version=body.choice_version + 1, choice=body.choice, candidate_id=body.candidate_id, candidate_version=body.candidate_version, confirmed_at=now, updated_at=now)).rowcount
+            if changed != 1:
+                raise HTTPException(409, "选择版本已变化，请刷新后重选")
+        else:
+            db.add(ExpressionChoice(utterance_id=item.id, utterance_version=item.version, version=1, choice=body.choice, candidate_id=body.candidate_id, candidate_version=body.candidate_version, confirmed_at=now, updated_at=now))
+        clear_share(db, item)
+        db.flush()
+        audit(db, actor, "expression.choice", "utterance", item.id, item.version)
+        return complete_idempotency(db, record, expression_detail(db, item))
+
+    @app.post(prefix + "/topics/{topic_id}/understandings")
+    def create_understanding(topic_id: str, body: s.UnderstandingCreate, request: Request, ctx=Depends(context)):
+        db, actor = ctx
+        accessible_topic(db, actor, topic_id)
+        source = db.get(Utterance, body.utterance_id)
+        if not source or source.shared_topic_id != topic_id:
+            raise HTTPException(404, "记录不可访问")
+        lock_utterance(db, source, source.version)
+        view = current_viewpoint(db, source)
+        if not view or source.shared_topic_id != topic_id:
+            raise HTTPException(404, "记录不可访问")
+        if source.author_id == actor.id:
+            raise HTTPException(422, "理解核对由听者发起，不能核对本人表达")
+        if any(view[key] != getattr(body, key) for key in ("utterance_version", "representation", "candidate_id", "candidate_version")):
+            raise HTTPException(409, "当前共享观点已变化，请重新阅读后复述")
+        record, replay = begin_idempotency(db, actor, request, body)
+        if replay is not None:
+            return finish(db, replay)
+        item = Understanding(topic_id=topic_id, requester_id=actor.id, author_id=source.author_id, created_at=stamp(), updated_at=stamp(), **body.model_dump())
+        db.add(item)
+        db.flush()
+        audit(db, actor, "understanding.request", "understanding", item.id, item.version)
+        return complete_idempotency(db, record, understanding_data(db, item))
+
+    @app.get(prefix + "/understandings")
+    def understandings(ctx=Depends(context)):
+        db, actor = ctx
+        items = db.scalars(select(Understanding).where(or_(Understanding.requester_id == actor.id, Understanding.author_id == actor.id)).order_by(Understanding.created_at.desc()))
+        return finish(db, [understanding_data(db, item) for item in items if understanding_source_current(db, item)])
+
+    @app.post(prefix + "/understandings/{item_id}/response")
+    def respond_understanding(item_id: str, body: s.UnderstandingResponse, request: Request, ctx=Depends(context)):
+        db, actor = ctx
+        item = accessible_understanding(db, actor, item_id, author=True)
+        source = db.get(Utterance, item.utterance_id)
+        lock_utterance(db, source, item.utterance_version)
+        if not understanding_source_current(db, item):
+            raise HTTPException(404, "记录不可访问")
+        record, replay = begin_idempotency(db, actor, request, body)
+        if replay is not None:
+            return finish(db, replay)
+        check_version(item, body.object_version)
+        if item.status != "pending":
+            raise HTTPException(422, "该理解核对已有回应")
+        cas(db, Understanding, item, body.object_version, {"status": body.status, "correction": body.correction, "version": body.object_version + 1, "updated_at": stamp()}, Understanding.status == "pending")
+        audit(db, actor, "understanding.respond", "understanding", item.id, item.version)
+        return complete_idempotency(db, record, understanding_data(db, item))
+
+    @app.get(prefix + "/ai/status")
+    def ai_status(request: Request, ctx=Depends(context)):
+        db, _actor = ctx
+        db.commit()  # No SQLite write lock around local service I/O.
+        status = app.state.ollama.status()
+        context(request, db)
+        return finish(db, status)
+
+    @app.post(prefix + "/utterances/{item_id}/suggestions")
+    def suggest_expression(item_id: str, body: s.SuggestionRequest, request: Request, ctx=Depends(context)):
+        db, actor = ctx
+        item = owned_utterance(db, actor, item_id)
+        check_version(item, body.object_version)
+        original_text = item.text
+        db.commit()  # Preview has no persisted effects and must not block freezing.
+        generation_error = None
+        try:
+            generated = app.state.ollama.suggestions(original_text, body.context, body.target_context, body.purpose)
+        except HTTPException as exc:
+            generation_error = exc
+        # Expire old identity-map values, then reauthenticate and reacquire source.
+        db.expire_all()
+        db, actor = context(request, db)
+        item = owned_utterance(db, actor, item_id)
+        check_version(item, body.object_version)
+        if generation_error:
+            raise generation_error
+        candidates = [{**candidate, "suggestion_token": app.state.suggestion_signer.issue(actor.id, item.id, item.version, candidate["kind"], candidate["text"], body.context, body.target_context, body.purpose)} for candidate in generated["candidates"]]
+        audit(db, actor, "expression.suggestions.preview", "utterance", item.id, item.version)
+        return finish(db, {"utterance_version": item.version, "candidates": candidates, "clarifications": generated["clarifications"], "provider": "ollama", "model": app.state.ollama.model})
 
     @app.get(prefix + "/topics")
     def topics(ctx=Depends(context)):
