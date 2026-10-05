@@ -25,3 +25,14 @@ export type UnderstandingStatus = 'pending' | 'accurate' | 'needs_correction' | 
 export interface Understanding { id: string; topic_id: string; utterance_id: string; utterance_version: number; representation: 'original' | 'candidate'; candidate_id: string | null; candidate_version: number | null; requester_id: string; requester_name: string; author_id: string; author_name: string; text: string; status: UnderstandingStatus; correction: string; version: number; created_at: string; updated_at: string }
 export interface AiStatus { enabled: boolean; available: boolean; provider: 'ollama' | null; model: string | null; reason: string }
 export interface ModelSuggestions { utterance_version: number; candidates: { kind: CandidateKind; text: string; suggestion_token: string }[]; clarifications: string[]; provider: 'ollama'; model: string }
+
+export type KnowledgeScope = 'community' | 'members'
+export interface KnowledgeRevisionInput { title: string; category: string; body: string; source: string; rights: string; purpose: string; maintainer: string; effective_until: string | null; requested_scope: KnowledgeScope; requested_member_ids: string[] }
+export interface KnowledgeRevision extends KnowledgeRevisionInput { id: string; document_id: string; number: number; created_at: string }
+export interface KnowledgeReview { id: string; document_id: string; revision_id: string; reviewer_id: string; reviewer_name: string; decision: 'approve' | 'changes_requested'; reason: string; created_at: string }
+export interface KnowledgeDetail { id: string; version: number; owner_id: string; owner_name: string; latest: KnowledgeRevision; submitted: KnowledgeRevision | null; published: KnowledgeRevision | null; reviewer_id: string | null; access_epoch: number; withdrawn_at: string | null; reviews: KnowledgeReview[]; publication_active: boolean; audience: { scope: KnowledgeScope; member_ids: string[] } | null }
+export interface KnowledgeReviewItem { id: string; version: number; owner_id: string; owner_name: string; revision: KnowledgeRevision }
+export interface KnowledgeSnippet { citation_id: string; quote: string; start_line: number; end_line: number }
+export interface PublishedDocument extends Document { revision_id: string; owner_name: string; maintainer: string; purpose: string; effective_until: string | null; scope: KnowledgeScope; access_epoch: number; snippets: KnowledgeSnippet[] }
+export interface KnowledgeCitation extends KnowledgeSnippet { document_id: string; revision_id: string; document_version: number; title: string; source: string; access_epoch: number }
+export interface KnowledgeAnswer { mode: 'extract' | 'local_model' | 'insufficient'; answer: string; citations: KnowledgeCitation[]; provider: null | 'ollama'; model: string | null }

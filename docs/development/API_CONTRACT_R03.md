@@ -18,7 +18,7 @@ Revision 字段：`id,document_id,number,title,category,body,source,rights,purpo
 
 ## 接口（/api/v1，认证读写都要求 Cookie 与内存证明）
 
-通用 `KnowledgeDetail`：`{id,version,owner_id,owner_name,latest:Revision,submitted:Revision|null,published:Revision|null,reviewer_id|null,access_epoch,withdrawn_at|null,reviews:Review[]}`，仅作者完整读取；审核人响应不能夹带未送审 latest，审核用专用形状。Revision requested_member_ids 仅作者及当前审核人可见，不放在目录公共摘要中。
+通用 `KnowledgeDetail`：`{id,version,owner_id,owner_name,latest:Revision,submitted:Revision|null,published:Revision|null,publication_active:boolean,reviewer_id|null,access_epoch,withdrawn_at|null,reviews:Review[],audience:{scope:'community'|'members',member_ids:string[]}|null}`，仅作者完整读取；审核人响应不能夹带未送审 latest，审核用专用形状。Revision requested_member_ids 仅作者及当前审核人可见，不放在目录公共摘要中。published 可保留最后发布版作本人历史；publication_active 由服务器按撤下及有效期计算，撤下或过期时 audience=null。audience 是当前有效范围；收紧后可能不同于不可变版本中的原申请范围，界面不得以申请名单冒充当前授权。
 
 | 接口 | 请求与结果 |
 | --- | --- |
@@ -27,11 +27,12 @@ Revision 字段：`id,document_id,number,title,category,body,source,rights,purpo
 | GET /knowledge/{id} | 作者完整详情；其他人404 |
 | PATCH /knowledge/{id} | `{object_version,...Revision字段}` → KnowledgeDetail；新增内容版本，不动原发布 |
 | GET /knowledge/reviewers | 当前有效 facilitator/admin 的 `{id,display_name}`，排除本人 |
-| POST /knowledge/{id}/submit | 幂等；`{object_version,revision_id,reviewer_id,consent:true}` → KnowledgeDetail；授权此精确版本给指定审核人 |
+| POST /knowledge/{id}/submit | 幂等；`{object_version,revision_id,reviewer_id,consent:true}` → KnowledgeDetail；授权最新、从未批准发布过的精确版本给指定审核人。曾批准的版本即使已撤下或收紧，也必须另存完整新版本再送审；旧键重放只返回当前详情、不改权限 |
+| POST /knowledge/{id}/cancel-submission | 幂等；`{object_version}` → KnowledgeDetail；本人撤回当前送审、停止审核人读取，不改变现有效发布，保留私人版本 |
 | GET /knowledge/reviews | 只返回当前本人审核队列：`{id,version,owner_id,owner_name,revision:Revision}`[]，无其他私人版本 |
 | POST /knowledge/{id}/review | 幂等；`{object_version,revision_id,decision:'approve'|'changes_requested',reason}`；退回理由1–2000，通过允许空理由；仅指定审核人，作者不可代确认。返回 `{ok:true,id,version,decision}`，不夹带草稿 |
-| POST /knowledge/{id}/withdraw | 幂等；`{object_version}` → KnowledgeDetail；立即停止现发布版访问，保留私人历史 |
-| POST /knowledge/{id}/restrict | 幂等；`{object_version,scope:'members',member_ids}` → KnowledgeDetail；只能从community收为固定名单，或删除现名单成员，不允许扩大。空名单可仅作者访问。无发布则422 |
+| POST /knowledge/{id}/withdraw | 幂等；`{object_version}` → KnowledgeDetail；立即停止现发布版访问，同时取消当前送审，保留私人历史，旧审核不得重新发布 |
+| POST /knowledge/{id}/restrict | 幂等；`{object_version,scope:'members',member_ids}` → KnowledgeDetail；只能从community收为固定名单，或删除现名单成员，不允许扩大。空名单可仅作者访问。无有效发布则422；同时取消当前送审，防止旧申请在收紧后扩大范围 |
 | GET /documents?q= | 保留旧目录形状，扩展发布元数据和 snippets；仅当前可读、未过期发布版；q<=200，匹配标题／正文 literal keyword，转义 LIKE |
 | GET /documents/{id}?revision_id= | 当前可读精确发布版全文与来源；无效版本404，query可省略取当前版 |
 | POST /knowledge/answers | `{question,use_model:false}` → KnowledgeAnswer，question1–200；只检索当前获准资料，默认返回明确标记资料摘录；use_model=true 调用可选 Ollama，默认关503，无伪造成功 |

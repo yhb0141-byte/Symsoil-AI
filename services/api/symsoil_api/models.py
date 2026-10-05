@@ -208,3 +208,59 @@ class Understanding(Base):
     version: Mapped[int] = mapped_column(Integer, default=1)
     created_at: Mapped[str] = mapped_column(String(40))
     updated_at: Mapped[str] = mapped_column(String(40))
+
+
+class KnowledgeDocument(Base):
+    __tablename__ = "knowledge_documents"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    owner_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    # Application-maintained references avoid a circular insert dependency with
+    # immutable revisions; every endpoint checks document/revision membership.
+    latest_revision_id: Mapped[str] = mapped_column(String(36))
+    submitted_revision_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    reviewer_id: Mapped[str | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    published_revision_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    access_epoch: Mapped[int] = mapped_column(Integer, default=0)
+    withdrawn_at: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    created_at: Mapped[str] = mapped_column(String(40))
+    updated_at: Mapped[str] = mapped_column(String(40))
+
+
+class KnowledgeRevision(Base):
+    __tablename__ = "knowledge_revisions"
+    __table_args__ = (UniqueConstraint("document_id", "number"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    document_id: Mapped[str] = mapped_column(ForeignKey("knowledge_documents.id"), index=True)
+    number: Mapped[int] = mapped_column(Integer)
+    title: Mapped[str] = mapped_column(String(160))
+    category: Mapped[str] = mapped_column(String(60))
+    body: Mapped[str] = mapped_column(Text)
+    source: Mapped[str] = mapped_column(Text)
+    rights: Mapped[str] = mapped_column(Text)
+    purpose: Mapped[str] = mapped_column(Text)
+    maintainer: Mapped[str] = mapped_column(Text)
+    effective_until: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    requested_scope: Mapped[str] = mapped_column(String(20))
+    requested_member_ids: Mapped[list[str]] = mapped_column(JSON)
+    created_at: Mapped[str] = mapped_column(String(40))
+
+
+class KnowledgeAudience(Base):
+    __tablename__ = "knowledge_audiences"
+    document_id: Mapped[str] = mapped_column(ForeignKey("knowledge_documents.id"), primary_key=True)
+    revision_id: Mapped[str] = mapped_column(ForeignKey("knowledge_revisions.id"))
+    scope: Mapped[str] = mapped_column(String(20))
+    # This is an explicit publication-time list, never inferred from roles.
+    member_ids: Mapped[list[str]] = mapped_column(JSON)
+
+
+class KnowledgeReview(Base):
+    __tablename__ = "knowledge_reviews"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    document_id: Mapped[str] = mapped_column(ForeignKey("knowledge_documents.id"), index=True)
+    revision_id: Mapped[str] = mapped_column(ForeignKey("knowledge_revisions.id"))
+    reviewer_id: Mapped[str] = mapped_column(ForeignKey("users.id"))
+    decision: Mapped[str] = mapped_column(String(30))
+    reason: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[str] = mapped_column(String(40))

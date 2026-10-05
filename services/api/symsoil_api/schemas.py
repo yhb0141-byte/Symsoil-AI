@@ -1,3 +1,4 @@
+import re
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -222,4 +223,140 @@ class ModelSuggestions(Body):
             raise ValueError("候选类型重复")
         if any(not item.strip() or len(item) > 1000 for item in self.clarifications):
             raise ValueError("澄清问题无效")
+        return self
+
+
+class KnowledgeFields(Body):
+    title: str = Field(min_length=1, max_length=160)
+    category: str = Field(min_length=1, max_length=60)
+    body: str = Field(min_length=1, max_length=20000)
+    source: str = Field(min_length=1, max_length=1000)
+    rights: str = Field(min_length=1, max_length=2000)
+    purpose: str = Field(min_length=1, max_length=1000)
+    maintainer: str = Field(min_length=1, max_length=500)
+    effective_until: str | None = Field(max_length=40)
+    requested_scope: Literal["community", "members"]
+    requested_member_ids: list[str] = Field(max_length=1000)
+
+    @field_validator("title", "category", "body", "source", "rights", "purpose", "maintainer")
+    @classmethod
+    def meaningful_fields(cls, value):
+        if not value.strip():
+            raise ValueError("资料字段不能为空白")
+        if re.search(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f\ud800-\udfff]", value):
+            raise ValueError("资料只接受普通文字，不能包含二进制控制字符")
+        return value
+
+    @field_validator("effective_until")
+    @classmethod
+    def timezone_expiry(cls, value):
+        if value is None:
+            return value
+        from datetime import datetime
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            if parsed.tzinfo is None or parsed.utcoffset() is None:
+                raise ValueError("missing timezone")
+        except ValueError as exc:
+            raise ValueError("有效期须为带时区的 ISO 时间") from exc
+        return value
+
+    @model_validator(mode="after")
+    def explicit_audience(self):
+        ids = self.requested_member_ids
+        if any(not value or len(value) > 36 or re.search(r"[\x00-\x1f\x7f\ud800-\udfff]", value) for value in ids) or len(set(ids)) != len(ids):
+            raise ValueError("成员名单必须为不同的明确 ID")
+        if self.requested_scope == "community" and ids:
+            raise ValueError("全体成员范围不能夹带指定名单")
+        if self.requested_scope == "members" and not ids:
+            raise ValueError("申请固定名单至少需要一位成员")
+        return self
+
+
+class KnowledgePatch(KnowledgeFields, Version):
+    pass
+
+
+class KnowledgeSubmit(Version):
+    revision_id: str = Field(min_length=1, max_length=36)
+    reviewer_id: str = Field(min_length=1, max_length=36)
+    consent: Literal[True]
+
+    @field_validator("revision_id", "reviewer_id")
+    @classmethod
+    def safe_submission_ids(cls, value):
+        if re.search(r"[\x00-\x1f\x7f\ud800-\udfff]", value):
+            raise ValueError("审核标识必须为有效文字")
+        return value
+
+    @field_validator("consent", mode="before")
+    @classmethod
+    def explicit_boolean_consent(cls, value):
+        if value is not True:
+            raise ValueError("送审必须由本人明确授权")
+        return value
+
+
+class KnowledgeReviewRequest(Version):
+    revision_id: str = Field(min_length=1, max_length=36)
+    decision: Literal["approve", "changes_requested"]
+    reason: str = Field(max_length=2000)
+
+    @field_validator("reason", "revision_id")
+    @classmethod
+    def safe_review_text(cls, value):
+        if re.search(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f\ud800-\udfff]", value):
+            raise ValueError("审核字段只接受普通文字")
+        return value
+
+    @model_validator(mode="after")
+    def return_reason(self):
+        if self.decision == "changes_requested" and not self.reason.strip():
+            raise ValueError("退回修改须写明理由")
+        return self
+
+
+class KnowledgeRestrict(Version):
+    scope: Literal["members"]
+    member_ids: list[str] = Field(max_length=1000)
+
+    @field_validator("member_ids")
+    @classmethod
+    def explicit_ids(cls, value):
+        if len(set(value)) != len(value) or any(not item or len(item) > 36 or re.search(r"[\x00-\x1f\x7f\ud800-\udfff]", item) for item in value):
+            raise ValueError("受众须为不同的明确成员 ID")
+        return value
+
+
+class KnowledgeAnswerRequest(Body):
+    question: str = Field(min_length=1, max_length=200)
+    use_model: bool = False
+
+    @field_validator("question")
+    @classmethod
+    def meaningful_question(cls, value):
+        if not value.strip():
+            raise ValueError("请输入问题")
+        if re.search(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f\ud800-\udfff]", value):
+            raise ValueError("问题只接受普通文字")
+        return value
+
+
+class ModelKnowledgeAnswer(Body):
+    answer: str = Field(max_length=10000)
+    citation_ids: list[str] = Field(max_length=6)
+
+    @field_validator("answer")
+    @classmethod
+    def safe_answer_text(cls, value):
+        if re.search(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f\ud800-\udfff]", value):
+            raise ValueError("模型回答不是普通文字")
+        return value
+
+    @model_validator(mode="after")
+    def valid_citation_ids(self):
+        if any(not item or len(item) > 160 for item in self.citation_ids) or len(set(self.citation_ids)) != len(self.citation_ids):
+            raise ValueError("引用标识无效或重复")
+        if self.answer.strip() and not self.citation_ids:
+            raise ValueError("非空回答必须引用本次资料")
         return self

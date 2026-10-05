@@ -1,6 +1,6 @@
-# SymSoil API · R0.2
+# SymSoil API · R0.3
 
-This service is a **synthetic-data development release**. It implements local accounts, restricted topics, private original expressions, two optional reformulations, independent accuracy confirmation and explicit sharing, private bilateral understanding checks, five stances, and independently accepted task invitations. It does not approve community decisions or execute projects. Local Ollama suggestions are optional and disabled by default; every manual path remains usable.
+This service is a **synthetic-data development release**. It implements local accounts, restricted topics, private original expressions, two optional reformulations, independent accuracy confirmation and explicit sharing, private bilateral understanding checks, five stances, independently accepted task invitations, and an explicitly reviewed text knowledge library. It does not approve community decisions or execute projects. Local Ollama suggestions are optional and disabled by default; every manual path remains usable.
 
 ## Run
 
@@ -53,6 +53,32 @@ Business writes use conditional SQL updates, not read-check-then-unconditional u
 
 Topics are accessible only to invited participants. Only an owner can add participants or issue task invitations. Task terms are visible only to issuer and recipient, even in topic details. An invitation can go to a member who cannot read the topic; accepting it does not grant topic access. A final acceptance/refusal ends that invitation; renegotiation remains open. No response means no stance and no task acceptance.
 
+## Reviewed text library
+
+R0.3 adds `knowledge_documents`, immutable `knowledge_revisions`, current `knowledge_audiences`, and `knowledge_reviews` without changing old columns. A private draft never creates or overwrites a legacy `documents` snapshot. Approval of an exact submitted revision publishes its snapshot and explicit audience in one transaction. A new private revision leaves the previous authorized publication accessible until separately approved. Submission reveals only that exact revision to one other currently active facilitator/admin; it gives no access to other drafts and no authority to approve decisions described by the document.
+
+`GET /knowledge/mine` and `/knowledge/{id}` are author-only management views. The reviewer receives only the submitted revision through `/knowledge/reviews`; even an administrator cannot browse unsubmitted drafts. The author's `publication_active` and `audience` report server-evaluated current publication and effective ACL; `published` retains the last published revision as private history after expiry or withdrawal. Revision `requested_member_ids` records the immutable original request, not later restrictions.
+
+Every directory result, dashboard document count, full-text read, quotation, and model context passes the same current-publication ACL. `community` means currently authenticated active members; `members` means an explicit fixed list plus the owner. Previous reviewers receive no continuing directory privilege. Expired, withdrawn, missing-metadata, or old-revision publications return 404 and leave no title, snippet, count, or citation in current results. Literal keyword search escapes SQL LIKE metacharacters. Source text is never fetched or turned into an external download link.
+
+The owner can cancel submission, withdraw a publication, or reduce an audience. Withdrawal and restriction also cancel pending review, preventing a previously submitted broad draft from republishing after withdrawal or restriction. Broadening or republishing needs a newly saved complete revision and independent review. A previously approved content revision cannot be submitted or approved again to restore its original broader audience. Author idempotent retries return the **current** management view; review retries return a minimal no-body receipt and never rerun publication. Text that someone already read or copied cannot be erased from their memory or copies.
+
+New demo seed builds explicit metadata for the three original synthetic documents. A database upgraded from R0/R0.2 gets new tables only and **does not automatically approve old text**. To initialize only exact, unmodified original synthetic seed records, deliberately run:
+
+```bash
+.venv/bin/python -m symsoil_api.cli migrate-synthetic-documents --demo
+```
+
+This requires the known original synthetic account identities and exact title/category/body/source/version matches. It does not reset accounts, overwrite content, assign real-data owners, or approve unknown legacy records. Unknown old `Document` rows remain physically preserved and quarantined. For real-data migration, a reviewed ownership, licensing, audience, expiry, and recovery procedure is still required; `create_all` is not that procedure.
+
+Only pasted ordinary text or a frontend local UTF-8 txt/md read is accepted, with strict bounds, metadata, timezone-aware optional expiry, and explicit member IDs. NUL, binary control characters, and surrogate codepoints are rejected. Binary upload, OCR, HTML rendering, embeddings, semantic search, and revision-history publication are outside this release.
+
+`POST /knowledge/answers` uses simple Chinese bigrams and English words to rank at most five current authorized documents, with at most three real-line excerpts per document. The manual path explicitly says “资料摘录，非模型回答” and returns at most six server-generated citations. No matching sources returns `insufficient` without invoking a model. This is a small development catalogue, not validated semantic retrieval or a source of live task/decision truth. Full-text links must include current `revision_id`; replaced citations stop resolving.
+
+Optional `use_model:true` calls the same local-only Ollama adapter and single inference gate as expression suggestions. It sends only the question and authorized `{citation_id,title,source,quote}` fragments. The output schema is `{answer,citation_ids}`; up to six distinct IDs must belong to this request, and a nonempty answer requires valid citations. The server reconstructs every title, quote, coordinate, version, and access epoch; model-created IDs, source-URL fields, extra metadata, tools, duplicate IDs, missing citations, and excessive outputs fail closed. No generated answer/question/context is written to the database or prompt logs. Model HTTP runs without the database writer lock and within the same cancellable 60-second total deadline.
+
+Before returning either success or generation failure, the server reauthenticates the session and account and rechecks **every source sent**, including unreferenced candidate sources, against current publication, epoch, effective time, and ACL. Any source change returns 409; a frozen account returns 401. Private revision editing alone leaves unchanged current publications usable.
+
 ## Tests and release limits
 
 ```bash
@@ -73,4 +99,4 @@ Each unsaved candidate preview has a ten-minute HMAC provenance token. The token
 
 Official protocol references: [Chat API](https://docs.ollama.com/api/chat), [structured output](https://docs.ollama.com/capabilities/structured-outputs), [local-only configuration](https://docs.ollama.com/faq).
 
-R0.2 does not include MFA, account recovery, distributed rate limiting, real knowledge ingestion, general generated Q&A, public-screen sessions, approval, memory publication, data export/deletion workflows, backups, or production schema migration tooling. A real installed model was not used in the automated protocol tests; they inject a mock HTTP transport and do not validate semantic quality. Existing schema changes require a reviewed migration before retaining any business data; do not treat `create_all` as a migration system. PostgreSQL driver compatibility is provided but its concurrent transaction behavior still needs integration testing before real use.
+R0.3 does not include MFA, account recovery, distributed rate limiting, binary knowledge ingestion, semantic/vector search, validated real-model answer quality, public-screen sessions, formal decision approval, memory publication, data export/deletion workflows, backups, or production migration/recovery tooling. A real installed model was not used in the automated protocol tests; they inject a mock HTTP transport and do not validate semantic quality. Existing schema changes require a reviewed migration before retaining any business data; do not treat `create_all` as a migration system. PostgreSQL driver compatibility is provided but its concurrent transaction behavior still needs integration testing before real use.

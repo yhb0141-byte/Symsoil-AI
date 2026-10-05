@@ -13,15 +13,16 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from . import schemas as s
 from .db import Base, database_url, make_engine, session_factory
-from .models import Audit, Document, ExpressionCandidate, ExpressionChoice, ExpressionShare, Idempotency, Invitation, Option, Participant, RegistrationInvite, Session, Stance, Topic, Understanding, User, Utterance
+from .models import Audit, ExpressionCandidate, ExpressionChoice, ExpressionShare, Idempotency, Invitation, Option, Participant, RegistrationInvite, Session, Stance, Topic, Understanding, User, Utterance
+from .knowledge import published_data, register_knowledge, visible_publications
 from .ollama import OllamaAdapter
 from .security import COOKIE_NAME, authenticate, digest, password_hasher, require_origin, secure_cookie, stamp, utcnow, verify_password
-from .serialize import current_viewpoint, document_data, expression_detail, invitation_data, topic_data, topic_detail, understanding_data, understanding_source_current, user_data, utterance_data, viewpoint_data
+from .serialize import current_viewpoint, expression_detail, invitation_data, topic_data, topic_detail, understanding_data, understanding_source_current, user_data, utterance_data, viewpoint_data
 from .suggestion_tokens import SuggestionSigner
 
 
 def create_app(url: str | None = None, web_dist: str | None = None):
-    app = FastAPI(title="SymSoil R0.2 API", version="0.2.0")
+    app = FastAPI(title="SymSoil R0.3 API", version="0.3.0")
     engine = make_engine(url or database_url())
     Base.metadata.create_all(engine)
     factory = session_factory(engine)
@@ -280,14 +281,12 @@ def create_app(url: str | None = None, web_dist: str | None = None):
 
     @app.get(prefix + "/documents")
     def documents(q: str = "", ctx=Depends(context)):
-        db, _actor = ctx
+        db, actor = ctx
         if len(q) > 200:
             raise HTTPException(422, "检索文字过长")
-        statement = select(Document).order_by(Document.title)
-        if q.strip():
-            # Escape LIKE metacharacters: the field is a literal keyword, not SQL.
-            statement = statement.where(or_(Document.title.contains(q.strip(), autoescape=True), Document.body.contains(q.strip(), autoescape=True)))
-        return finish(db, [document_data(item) for item in db.scalars(statement)])
+        return finish(db, [published_data(db, control, revision, audience, [q.strip().casefold()] if q.strip() else []) for control, revision, audience in visible_publications(db, actor, q)])
+
+    register_knowledge(app, prefix, context, finish, audit, begin_idempotency, complete_idempotency, cas)
 
     @app.get(prefix + "/utterances")
     def utterances(ctx=Depends(context)):
@@ -628,7 +627,7 @@ def create_app(url: str | None = None, web_dist: str | None = None):
         db, actor = ctx
         topic_items = list(db.scalars(select(Topic).join(Participant, Topic.id == Participant.topic_id).where(Participant.user_id == actor.id).order_by(Topic.created_at.desc())))
         pending = list(db.scalars(select(Invitation).where(Invitation.invitee_id == actor.id, Invitation.status.in_(("pending", "negotiating"))).order_by(Invitation.created_at)))
-        data = {"counts": {"topics": len(topic_items), "open_invitations": len(pending), "utterances": db.scalar(select(func.count()).select_from(Utterance).where(Utterance.author_id == actor.id)), "documents": db.scalar(select(func.count()).select_from(Document))}, "pending": [invitation_data(db, item) for item in pending], "topics": [topic_data(db, item) for item in topic_items], "ai": {"available": False}, "release": {"stage": "R0", "synthetic": True}}
+        data = {"counts": {"topics": len(topic_items), "open_invitations": len(pending), "utterances": db.scalar(select(func.count()).select_from(Utterance).where(Utterance.author_id == actor.id)), "documents": len(visible_publications(db, actor))}, "pending": [invitation_data(db, item) for item in pending], "topics": [topic_data(db, item) for item in topic_items], "ai": {"available": False}, "release": {"stage": "R0", "synthetic": True}}
         return finish(db, data)
 
     dist = Path(web_dist or os.getenv("SYMSOIL_WEB_DIST", "") or Path(__file__).resolve().parents[3] / "apps/web/dist").resolve()
