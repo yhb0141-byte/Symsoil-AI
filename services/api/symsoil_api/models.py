@@ -151,6 +151,28 @@ class Idempotency(Base):
     created_at: Mapped[str] = mapped_column(String(40))
 
 
+class RecoveryState(Base):
+    __tablename__ = "recovery_state"
+    id: Mapped[str] = mapped_column(String(20), primary_key=True, default="singleton")
+    instance_id: Mapped[str] = mapped_column(String(36), unique=True)
+    sequence: Mapped[int] = mapped_column(Integer, default=0)
+    chain_hash: Mapped[str] = mapped_column(String(64))
+    isolated: Mapped[bool] = mapped_column(Boolean, default=False)
+    reason: Mapped[str | None] = mapped_column(String(200), nullable=True)
+
+
+class RecoveryPending(Base):
+    __tablename__ = "recovery_pending"
+    event_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    action: Mapped[str] = mapped_column(String(80))
+    object_type: Mapped[str] = mapped_column(String(40))
+    object_id: Mapped[str] = mapped_column(String(36))
+    actor_id: Mapped[str] = mapped_column(String(36))
+    object_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    payload: Mapped[dict] = mapped_column(JSON)
+    created_at: Mapped[str] = mapped_column(String(40))
+
+
 class ExpressionCandidate(Base):
     __tablename__ = "expression_candidates"
     __table_args__ = (UniqueConstraint("utterance_id", "utterance_version", "kind"),)
