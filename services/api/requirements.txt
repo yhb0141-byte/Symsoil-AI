@@ -1,0 +1,6 @@
+# Exact versions exercised for R0. Update intentionally with the security suite.
+fastapi==0.142.2
+uvicorn==0.54.0
+SQLAlchemy==2.1.3
+argon2-cffi==25.1.0
+psycopg[binary]==3.3.6

@@ -1,0 +1,28 @@
+# Local data and credentials
+.env
+.env.*
+!.env.example
+.venv/
+data/
+*.db
+*.db-*
+*.sqlite*
+*.log
+*.pem
+*.key
+backups/
+models/
+
+# Build and test outputs
+node_modules/
+dist/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.egg-info/
+.coverage
+htmlcov/
+playwright-report/
+test-results/
+*.tsbuildinfo
+.DS_Store

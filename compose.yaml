@@ -1,0 +1,15 @@
+services:
+  app:
+    build: .
+    ports:
+      - "127.0.0.1:8000:8000"
+    environment:
+      DATABASE_URL: sqlite:////data/symsoil.db
+      SYMSOIL_MODE: development
+      SYMSOIL_COOKIE_SECURE: "false"
+      SYMSOIL_ALLOWED_ORIGINS: http://localhost:8000,http://127.0.0.1:8000
+    volumes:
+      - symsoil-data:/data
+    restart: unless-stopped
+volumes:
+  symsoil-data:
