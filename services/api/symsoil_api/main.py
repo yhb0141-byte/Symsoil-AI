@@ -15,6 +15,7 @@ from . import schemas as s
 from .corrections import register_corrections
 from .db import Base, database_url, make_engine, session_factory
 from .models import Audit, ExpressionCandidate, ExpressionChoice, ExpressionShare, Idempotency, Invitation, Option, Participant, RegistrationInvite, Session, Stance, Topic, Understanding, User, Utterance
+from .recovery import RecoveryError, RecoveryStore
 from .knowledge import published_data, register_knowledge, visible_publications
 from .ollama import OllamaAdapter
 from .security import COOKIE_NAME, authenticate, digest, password_hasher, require_origin, secure_cookie, stamp, utcnow, verify_password
@@ -23,15 +24,22 @@ from .suggestion_tokens import SuggestionSigner
 
 
 def create_app(url: str | None = None, web_dist: str | None = None):
-    app = FastAPI(title="SymSoil R0.4 API", version="0.4.0")
+    app = FastAPI(title="SymSoil R0.5 API", version="0.5.0")
     engine = make_engine(url or database_url())
+    recovery = RecoveryStore(engine)
     Base.metadata.create_all(engine)
     factory = session_factory(engine)
+    recovery.initialize(factory)
     app.state.engine = engine
     app.state.session_factory = factory
     app.state.cookie_secure = secure_cookie()
     app.state.ollama = OllamaAdapter()
     app.state.suggestion_signer = SuggestionSigner()
+    app.state.recovery = recovery
+
+    @app.exception_handler(RecoveryError)
+    async def recovery_error(_request, exc):
+        return JSONResponse(status_code=503, content={"detail": str(exc)})
 
     @app.exception_handler(RequestValidationError)
     async def validation_error(_request, exc):
@@ -57,6 +65,7 @@ def create_app(url: str | None = None, web_dist: str | None = None):
     def database():
         with factory() as db:
             try:
+                recovery.assert_ready(db)
                 yield db
             finally:
                 db.rollback()
@@ -74,11 +83,13 @@ def create_app(url: str | None = None, web_dist: str | None = None):
         return db, actor
 
     def finish(db, data):
-        db.commit()
+        recovery.commit(db)
         return data
 
-    def audit(db, actor, action, kind, item_id, version=None):
+    def audit(db, actor, action, kind, item_id, version=None, restrictive=None):
         db.add(Audit(actor_id=actor.id, action=action, object_type=kind, object_id=item_id, object_version=version, created_at=stamp()))
+        if restrictive is not False:
+            recovery.queue(db, actor.id, action, kind, item_id, version)
 
     def owned_utterance(db, actor, item_id):
         item = db.get(Utterance, item_id)
@@ -182,6 +193,10 @@ def create_app(url: str | None = None, web_dist: str | None = None):
     @app.get(prefix + "/health")
     def health():
         return {"status": "ok", "stage": "R0", "ai_available": False}
+
+    @app.get(prefix + "/ready")
+    def ready(_db=Depends(database)):
+        return {"status": "ready"}
 
     @app.post(prefix + "/auth/login")
     def login(body: s.Login, request: Request, response: Response, db=Depends(database)):
@@ -308,10 +323,11 @@ def create_app(url: str | None = None, web_dist: str | None = None):
     def edit_utterance(item_id: str, body: s.UtterancePatch, ctx=Depends(context)):
         db, actor = ctx
         item = owned_utterance(db, actor, item_id)
+        was_shared = item.shared_topic_id is not None
         cas(db, Utterance, item, body.object_version, {"title": body.title, "text": body.text, "version": body.object_version + 1, "confirmed_version": None, "confirmed_at": None, "shared_topic_id": None, "shared_version": None, "shared_text": None, "updated_at": stamp()})
         db.execute(delete(ExpressionChoice).where(ExpressionChoice.utterance_id == item.id))
         db.execute(delete(ExpressionShare).where(ExpressionShare.utterance_id == item.id))
-        audit(db, actor, "utterance.edit", "utterance", item.id, item.version)
+        audit(db, actor, "utterance.edit", "utterance", item.id, item.version, restrictive=was_shared)
         return finish(db, utterance_data(item))
 
     @app.post(prefix + "/utterances/{item_id}/confirmations")
@@ -399,11 +415,12 @@ def create_app(url: str | None = None, web_dist: str | None = None):
         lock_utterance(db, item, body.object_version)
         candidate = current_candidate(db, item, candidate_id)
         was_confirmed = candidate.confirmed_version is not None
+        was_shared = item.shared_topic_id is not None
         cas(db, ExpressionCandidate, candidate, body.candidate_version, {**body.model_dump(exclude={"object_version", "candidate_version"}), "version": body.candidate_version + 1, "origin": "manual", "confirmed_version": None, "confirmed_at": None, "updated_at": stamp()})
         if was_confirmed:
             db.execute(delete(ExpressionChoice).where(ExpressionChoice.utterance_id == item.id))
             clear_share(db, item)
-        audit(db, actor, "expression.candidate.edit", "candidate", candidate.id, candidate.version)
+        audit(db, actor, "expression.candidate.edit", "candidate", candidate.id, candidate.version, restrictive=was_shared and was_confirmed)
         return finish(db, expression_detail(db, item))
 
     @app.post(prefix + "/utterances/{item_id}/choice")
@@ -414,6 +431,7 @@ def create_app(url: str | None = None, web_dist: str | None = None):
         if replay is not None:
             return finish(db, replay)
         lock_utterance(db, item, body.object_version)
+        was_shared = item.shared_topic_id is not None
         choice = current_choice(db, item)
         if (choice.version if choice else 0) != body.choice_version:
             raise HTTPException(409, "选择版本已变化，请刷新后重选")
@@ -430,7 +448,7 @@ def create_app(url: str | None = None, web_dist: str | None = None):
             db.add(ExpressionChoice(utterance_id=item.id, utterance_version=item.version, version=1, choice=body.choice, candidate_id=body.candidate_id, candidate_version=body.candidate_version, confirmed_at=now, updated_at=now))
         clear_share(db, item)
         db.flush()
-        audit(db, actor, "expression.choice", "utterance", item.id, item.version)
+        audit(db, actor, "expression.choice", "utterance", item.id, item.version, restrictive=was_shared)
         return complete_idempotency(db, record, expression_detail(db, item))
 
     @app.post(prefix + "/topics/{topic_id}/understandings")

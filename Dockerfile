@@ -8,12 +8,14 @@ RUN npm run build
 FROM python:3.12-slim-bookworm
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 \
     PYTHONPATH=/app/services/api SYMSOIL_WEB_DIST=/app/apps/web/dist \
-    DATABASE_URL=sqlite:////data/symsoil.db SYMSOIL_MODE=development
+    DATABASE_URL=sqlite:////data/symsoil.db SYMSOIL_MODE=development \
+    SYMSOIL_REVOCATION_DIR=/revocations SYMSOIL_RECOVERY_WITNESS_DIR=/witness
 WORKDIR /app
 COPY services/api/requirements.txt /tmp/requirements.txt
 RUN pip install --no-cache-dir -r /tmp/requirements.txt \
     && useradd --uid 10001 --create-home symsoil \
-    && mkdir -p /data && chown symsoil:symsoil /data
+    && mkdir -p /data /revocations /witness \
+    && chown symsoil:symsoil /data /revocations /witness
 COPY services/api/symsoil_api/ /app/services/api/symsoil_api/
 COPY --from=web /build/apps/web/dist/ /app/apps/web/dist/
 USER symsoil

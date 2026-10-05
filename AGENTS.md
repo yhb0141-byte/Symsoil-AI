@@ -2,7 +2,7 @@
 
 Build SymSoil as a community-controlled local application. Read docs/product/PRD.md and the current release scope before changing behavior.
 
-Current increment: R0.4; read docs/development/R04_SCOPE.md and API_CONTRACT_R04.md alongside the R0.3 and R0.2 baseline contracts. The uploaded implementation-plan alignment is docs/product/IMPLEMENTATION_ALIGNMENT.md. All current increments remain synthetic development, not a complete R1 release. Read CONTINUATION.md before resuming work to avoid concurrent branch changes.
+Current increment: R0.5; read docs/development/R05_RECOVERY_SCOPE.md and API_CONTRACT_R05_RECOVERY.md alongside the R0.4, R0.3 and R0.2 baseline contracts. The uploaded implementation-plan alignment is docs/product/IMPLEMENTATION_ALIGNMENT.md. All current increments remain synthetic development, not a complete R1 release. Read CONTINUATION.md before resuming work to avoid concurrent branch changes.
 
 - R0 is a synthetic-data development release. Never imply that a synthetic acceptance or discussion is a real community decision.
 - Accuracy confirmation, sharing permission, stance, approval, and task acceptance are different operations.
