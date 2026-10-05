@@ -12,6 +12,7 @@ from sqlalchemy.exc import IntegrityError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from . import schemas as s
+from .corrections import register_corrections
 from .db import Base, database_url, make_engine, session_factory
 from .models import Audit, ExpressionCandidate, ExpressionChoice, ExpressionShare, Idempotency, Invitation, Option, Participant, RegistrationInvite, Session, Stance, Topic, Understanding, User, Utterance
 from .knowledge import published_data, register_knowledge, visible_publications
@@ -22,7 +23,7 @@ from .suggestion_tokens import SuggestionSigner
 
 
 def create_app(url: str | None = None, web_dist: str | None = None):
-    app = FastAPI(title="SymSoil R0.3 API", version="0.3.0")
+    app = FastAPI(title="SymSoil R0.4 API", version="0.4.0")
     engine = make_engine(url or database_url())
     Base.metadata.create_all(engine)
     factory = session_factory(engine)
@@ -287,6 +288,7 @@ def create_app(url: str | None = None, web_dist: str | None = None):
         return finish(db, [published_data(db, control, revision, audience, [q.strip().casefold()] if q.strip() else []) for control, revision, audience in visible_publications(db, actor, q)])
 
     register_knowledge(app, prefix, context, finish, audit, begin_idempotency, complete_idempotency, cas)
+    register_corrections(app, prefix, context, finish, audit, begin_idempotency, cas)
 
     @app.get(prefix + "/utterances")
     def utterances(ctx=Depends(context)):

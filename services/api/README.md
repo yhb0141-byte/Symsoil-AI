@@ -100,3 +100,7 @@ Each unsaved candidate preview has a ten-minute HMAC provenance token. The token
 Official protocol references: [Chat API](https://docs.ollama.com/api/chat), [structured output](https://docs.ollama.com/capabilities/structured-outputs), [local-only configuration](https://docs.ollama.com/faq).
 
 R0.3 does not include MFA, account recovery, distributed rate limiting, binary knowledge ingestion, semantic/vector search, validated real-model answer quality, public-screen sessions, formal decision approval, memory publication, data export/deletion workflows, backups, or production migration/recovery tooling. A real installed model was not used in the automated protocol tests; they inject a mock HTTP transport and do not validate semantic quality. Existing schema changes require a reviewed migration before retaining any business data; do not treat `create_all` as a migration system. PostgreSQL driver compatibility is provided but its concurrent transaction behavior still needs integration testing before real use.
+
+## R0.4 双方资料纠错
+
+接口合同：`docs/development/API_CONTRACT_R04.md`。新增 `knowledge_corrections` 表和 `/documents/{id}/correction-context`、`/knowledge-corrections` 列表／创建／详情、`/{id}/respond` 与 `/{id}/withdraw`。继续使用会话 Cookie、CSRF、对象版本和 Idempotency-Key。请求只保存显式问题与回应及关联身份，不保存原文或标题快照。来源动态按当前精确发布版与受众鉴权，不能把纠错正文进入检索。管理员身份不扩大双方读取范围。
