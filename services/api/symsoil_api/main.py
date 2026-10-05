@@ -13,6 +13,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from . import schemas as s
 from .corrections import register_corrections
+from .decisions import register_decisions
 from .db import Base, database_url, make_engine, session_factory
 from .models import Audit, ExpressionCandidate, ExpressionChoice, ExpressionShare, Idempotency, Invitation, Option, Participant, RegistrationInvite, Session, Stance, Topic, Understanding, User, Utterance
 from .recovery import RecoveryError, RecoveryStore
@@ -24,7 +25,7 @@ from .suggestion_tokens import SuggestionSigner
 
 
 def create_app(url: str | None = None, web_dist: str | None = None):
-    app = FastAPI(title="SymSoil R0.5 API", version="0.5.0")
+    app = FastAPI(title="SymSoil R0.6 API", version="0.6.0")
     engine = make_engine(url or database_url())
     recovery = RecoveryStore(engine)
     Base.metadata.create_all(engine)
@@ -304,6 +305,7 @@ def create_app(url: str | None = None, web_dist: str | None = None):
 
     register_knowledge(app, prefix, context, finish, audit, begin_idempotency, complete_idempotency, cas)
     register_corrections(app, prefix, context, finish, audit, begin_idempotency, cas)
+    register_decisions(app, prefix, context, finish, audit, begin_idempotency, complete_idempotency, cas)
 
     @app.get(prefix + "/utterances")
     def utterances(ctx=Depends(context)):

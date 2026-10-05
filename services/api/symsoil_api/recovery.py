@@ -15,6 +15,7 @@ from uuid import uuid4
 from sqlalchemy import delete, select
 
 from .models import (
+    ApprovalAuthority,
     ExpressionCandidate,
     KnowledgeAudience,
     KnowledgeCorrection,
@@ -38,6 +39,7 @@ RESTRICTIONS = {
     "knowledge.withdraw",
     "knowledge.restrict",
     "correction.withdraw",
+    "approval.authority.revoke",
 }
 
 
@@ -175,6 +177,9 @@ class RecoveryStore:
         if action == "correction.withdraw":
             item = db.get(KnowledgeCorrection, object_id)
             return {"status": item.status if item else "withdrawn"}
+        if action == "approval.authority.revoke":
+            item = db.get(ApprovalAuthority, object_id)
+            return {"active": bool(item and item.active), "member_id": item.member_id if item else None, "topic_id": item.topic_id if item else None, "version": item.version if item else None, "blocked_decision_ids": list(db.info.get("authority_blocked_decisions", []))}
         return {}
 
     def queue(self, db, actor_id, action, object_type, object_id, object_version):

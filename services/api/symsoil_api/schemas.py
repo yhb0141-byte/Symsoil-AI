@@ -118,6 +118,53 @@ class InvitationResponse(Version):
     note: str = Field(default="", max_length=5000)
 
 
+class ApprovalAuthorityCreate(Body):
+    member_id: str = Field(min_length=1, max_length=36)
+    topic_id: str = Field(min_length=1, max_length=36)
+    basis: str = Field(min_length=1, max_length=2000)
+
+
+class DecisionCreate(Body):
+    option_id: str = Field(min_length=1, max_length=36)
+    option_version: int = Field(ge=1)
+    title: str = Field(min_length=1, max_length=160)
+    text: str = Field(min_length=1, max_length=10000)
+    effect_conditions: list[str] = Field(default_factory=list, max_length=20)
+    resource_conditions: list[str] = Field(default_factory=list, max_length=20)
+
+    @field_validator("effect_conditions", "resource_conditions")
+    @classmethod
+    def valid_conditions(cls, values):
+        if any(not value.strip() or len(value) > 500 for value in values) or len(values) != len(set(values)):
+            raise ValueError("条件不能为空、重复或超过500字")
+        return values
+
+
+class DecisionSubmit(Version):
+    rule_version: str = Field(min_length=1, max_length=80)
+    required_approver_ids: list[str] = Field(min_length=2, max_length=20)
+    required_invitation_ids: list[str] = Field(default_factory=list, max_length=100)
+
+    @model_validator(mode="after")
+    def distinct_required(self):
+        if len(set(self.required_approver_ids)) != len(self.required_approver_ids) or len(set(self.required_invitation_ids)) != len(self.required_invitation_ids):
+            raise ValueError("必需批准者和任务不得重复")
+        return self
+
+
+class DecisionConditionVerify(Version):
+    condition_version: int = Field(ge=1)
+    satisfied: bool
+
+
+class DecisionApprove(Version):
+    consent: Literal[True]
+
+
+class DecisionStart(Version):
+    confirm_start: Literal[True]
+
+
 class ExpressionContext(Body):
     context: str = Field(max_length=3000)
     target_context: str = Field(max_length=1000)

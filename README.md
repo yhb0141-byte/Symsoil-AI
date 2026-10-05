@@ -2,7 +2,7 @@
 
 由社区掌握的本地协作工作台，帮助成员表达、核对彼此理解、讨论不同方案并形成清楚的行动约定。
 
-当前版本为 **R0.5 合成数据开发版**。在 R0.4 双方私有资料纠错基础上，新增权限收紧只追加日志、独立可信水位和不一致时故障关闭。Ollama 本机适配默认关闭；隔离后的自动恢复、真实模型质量、正式决定批准、共同记忆发布和完整备份恢复仍需后续验收。
+当前版本为 **R0.6 合成数据开发版**。在 R0.5 恢复安全基础上，新增议题范围批准资格、双人批准、资格变化阻断，以及决定生效后独立核对任务接受与资源条件的后端闭环。决定前端、修订／撤销／取代、任务变更复盘和真实规则配置仍未交付；Ollama 本机适配默认关闭。
 
 ## 当前功能
 
@@ -21,6 +21,7 @@
 - 精确版本纠错预览、核对实际录入者、双方私有请求与本人回应；需要改文时另存新稿，独立送审。
 - 个人操作记录。
 - 冻结、撤回、撤下和受众收紧在业务库之外留下最小化哈希链事件；数据库、日志或可信水位不一致时业务接口保持隔离。
+- 合成决定把立场、正式批准、本人接受任务和行动开始分开；至少两名登记批准者对精确版本批准，且任务与资源条件齐备后才能开始。
 
 确认表达准确不自动分享，理解准确不表示赞同，同意方案不自动接受任务，未回应不等于支持。只分享转述时，私人原话和补充背景不会一起进入议题。账号管理员也不能因此读取他人的私人草稿。
 
@@ -41,7 +42,7 @@ npm --prefix apps/web run build
 
 默认数据位于 `data/symsoil.db`，仅供开发验证。`start.sh` 只启动已有构建，不安装或下载依赖。`dev.sh` 用于开发时重新安装依赖及构建。任务接受发生在合成项目中，不构成真实社区决定或实际资源使用授权。
 
-R0.5 在 R0.4 上新增 `recovery_state`、`recovery_pending` 两张表，并在首次启动创建外部日志与可信水位；不改旧业务列或已有记录。升级前必须停机备份数据库，两个外部目录初始化后不得丢弃或从不同恢复点混用。请阅读 [R0.5 范围](docs/development/R05_RECOVERY_SCOPE.md) 与 [R0.5 合同](docs/development/API_CONTRACT_R05_RECOVERY.md)。
+R0.6 在 R0.5 上新增批准资格、决定、条件和批准回执四张表，不改旧业务列。升级前仍须停机保存数据库与两份恢复介质。请阅读 [R0.6 范围](docs/development/R06_DECISIONS_SCOPE.md) 与 [R0.6 合同](docs/development/API_CONTRACT_R06_DECISIONS.md)。
 
 已有 R0.2 合成数据库可继续使用，本轮增加四张资料表，不重置账号或原话。没有审核元数据的旧资料默认隔离，不会在启动时自动发布。仅为恢复完全匹配的原始演示资料，可在停机备份后显式执行：
 
@@ -81,7 +82,7 @@ docker compose up -d
 ./scripts/check.sh
 ```
 
-后端测试覆盖对象权限、读取证明、CSRF、账号冻结、版本冲突、表达／理解隔离、资料审核、固定受众、到期、引用与生成期间撤权，并增加外部日志故障、介质篡改和业务水位回退。前端进行领域规则、迟到请求失效、TypeScript 检查与生产构建；[浏览器流程](tests/browser/README.md) 走实际 API 和数据库路径。模型协议测试使用明确标记的合成服务，不代表真实模型质量。结果及未验收项目见 [R0.5 验证记录](docs/development/VALIDATION_R05_RECOVERY.md)。
+后端测试覆盖对象权限、读取证明、CSRF、账号冻结、版本冲突、表达／理解隔离、资料审核、固定受众、到期、引用与生成期间撤权，并增加恢复水位、批准资格、双人批准、资格变化阻断和行动开始条件。前端进行领域规则、迟到请求失效、TypeScript 检查与生产构建；[浏览器流程](tests/browser/README.md) 走实际 API 和数据库路径。模型协议测试使用明确标记的合成服务，不代表真实模型质量。结果及未验收项目见 [R0.6 验证记录](docs/development/VALIDATION_R06_DECISIONS.md)。
 
 ## 产品与工程文档
 
@@ -93,11 +94,14 @@ docker compose up -d
 | [R0.2 范围](docs/development/R02_SCOPE.md) | 表达、理解核对及会话证明增量 |
 | [R0.3 范围](docs/development/R03_SCOPE.md) | 文字资料、指定审核、按权限检索及来源引用 |
 | [R0.5 恢复安全范围](docs/development/R05_RECOVERY_SCOPE.md) | 权限收紧日志、可信水位、失败关闭及明确限制 |
+| [R0.6 决定范围](docs/development/R06_DECISIONS_SCOPE.md) | 双人批准、资格变化和行动开始条件 |
 | [API 合同](docs/development/API_CONTRACT.md) | 前后端接口、数据形状和关键写入规则 |
 | [R0.2 API 合同](docs/development/API_CONTRACT_R02.md) | 候选版本、本人选择、分享与模型预览 |
 | [R0.3 API 合同](docs/development/API_CONTRACT_R03.md) | 资料版本、审核、受众和问答引用 |
 | [R0.5 恢复合同](docs/development/API_CONTRACT_R05_RECOVERY.md) | 限制事件格式、提交次序、隔离语义和运行目录 |
+| [R0.6 决定合同](docs/development/API_CONTRACT_R06_DECISIONS.md) | 批准资格、决定版本、条件、批准和开始接口 |
 | [R0.5 验证记录](docs/development/VALIDATION_R05_RECOVERY.md) | 实际测试证据、未运行项和停止条件 |
+| [R0.6 验证记录](docs/development/VALIDATION_R06_DECISIONS.md) | 决定、批准、资格变化与开始条件的实际测试证据 |
 | [续作记录](docs/development/CONTINUATION.md) | 当前状态、恢复顺序及开发窗口 |
 | [实施方案对照](docs/product/IMPLEMENTATION_ALIGNMENT.md) | 上传方案与实际交付的对应及差异 |
 | [架构决定](docs/adr/0001-r0-local-modular-application.md) | 本地模块化应用、数据库与 AI 边界 |
